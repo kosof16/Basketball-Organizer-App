@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import os
 from datetime import datetime, date, time, timedelta
-from urllib.parse import quote_plus
 import random
 
 # --- Page Configuration ---
@@ -67,12 +66,11 @@ def save_responses(df, backend):
 
 # --- Time Formatting Helper ---
 def format_time_str(t_str):
-    # t_str like 'HH:MM:SS' or 'HH:MM'
     try:
         t = datetime.fromisoformat(t_str).time()
-    except ValueError:
+    except Exception:
         parts = t_str.split(':')
-        t = time(int(parts[0]), int(parts[1]))
+        t = time(int(parts[0]), int(parts[1]) if len(parts)>1 else 0)
     h, m = t.hour, t.minute
     ampm = 'am' if h < 12 else 'pm'
     hr = h % 12 or 12
@@ -85,6 +83,7 @@ def format_time_str(t_str):
 # --- RSVP Logic ---
 def add_response(backend, name, others, attend):
     df = load_responses(backend)
+    # Remove existing entry
     df = df[df['name'] != name]
     status = '❌ Cancelled' if not attend else ''
     entry = {
@@ -105,7 +104,9 @@ def update_statuses(backend):
         if r['status'] == '❌ Cancelled':
             statuses.append('❌ Cancelled')
         else:
-            extras = len([o for o in (r.get('others','') or '').split(',') if o.strip()])
+            raw = r.get('others', '')
+            others = str(raw) if pd.notna(raw) else ''
+            extras = len([o for o in others.split(',') if o.strip()])
             parts = 1 + extras
             if cum + parts <= CAPACITY:
                 statuses.append('✅ Confirmed')
@@ -123,7 +124,9 @@ def generate_teams(backend):
     players = []
     for _, r in confirmed.iterrows():
         players.append(r['name'])
-        for o in (r.get('others','') or '').split(','):
+        raw = r.get('others','')
+        others = str(raw) if pd.notna(raw) else ''
+        for o in others.split(','):
             if o.strip(): players.append(o.strip())
     if len(players) < 6:
         return None
@@ -147,6 +150,7 @@ if section == '⚙️ Admin':
                 st.sidebar.error("Incorrect password")
     else:
         BACKEND = st.sidebar.selectbox("Data Backend", ['csv', 'excel'])
+        # Schedule Game
         st.subheader(":calendar: Schedule Game")
         game = load_game(BACKEND)
         with st.form("schedule_form", clear_on_submit=True):
@@ -160,10 +164,12 @@ if section == '⚙️ Admin':
             if st.form_submit_button("Save Schedule"):
                 save_game(BACKEND, gd.isoformat(), start.isoformat(), end.isoformat(), loc)
                 st.success("Schedule saved! 🏀")
+        # Display scheduled game
         if game:
             start_fmt = format_time_str(game.get('start',''))
             end_fmt = format_time_str(game.get('end',''))
-            st.markdown(f"**Date:** {game.get('date')} — **{start_fmt} to {end_fmt}** @ **{game.get('location')}**")
+            st.markdown(f"**Date:** {game.get('date','')} — **{start_fmt} to {end_fmt}** @ **{game.get('location','')}**")
+        # RSVP Overview
         st.subheader(":clipboard: RSVP Overview")
         df = load_responses(BACKEND)
         if df.empty:
@@ -184,6 +190,7 @@ if section == '⚙️ Admin':
                 st.table(df[df['status']=='⏳ Waitlist'][['name','others']])
             with st.expander("❌ Cancelled", expanded=False):
                 st.table(df[df['status']=='❌ Cancelled'][['name','others']])
+        # Generate teams
         if st.button("👥 Generate Teams"):
             teams = generate_teams(BACKEND)
             if teams:
@@ -219,7 +226,8 @@ else:
                     attend = st.select_slider("Will you attend?", options=["No ❌","Yes ✅"], value="Yes ✅")
                     others = st.text_input("Additional Players Invite Name(s) (comma-separated) 👥")
                     if st.form_submit_button("Submit RSVP 🎫"):
-                        if not name.strip(): st.error("Please enter your first name.")
+                        if not name.strip():
+                            st.error("Please enter your first name.")
                         else:
                             add_response(BACKEND, name.strip(), others.strip(), attend=="Yes ✅")
                             st.success("RSVP recorded! 🎉")
