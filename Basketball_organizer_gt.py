@@ -3,6 +3,7 @@ import pandas as pd
 import os
 from datetime import datetime, date, time, timedelta
 import random
+import altair as alt
 
 # --- Page Configuration ---
 st.set_page_config(page_title="🏀 Basketball Organizer", layout="wide")
@@ -35,7 +36,6 @@ def load_game(backend):
             return df.iloc[0].to_dict()
     return {}
 
-
 def save_game(backend, date_str, start_str, end_str, location):
     game_path, _ = _paths(backend)
     df = pd.DataFrame([{
@@ -49,13 +49,11 @@ def save_game(backend, date_str, start_str, end_str, location):
     else:
         df.to_excel(game_path, index=False)
 
-# --- Responses Persistence ---
 def load_responses(backend):
     _, resp_path = _paths(backend)
     if os.path.exists(resp_path):
         return pd.read_csv(resp_path) if backend == 'csv' else pd.read_excel(resp_path)
     return pd.DataFrame(columns=['name', 'others', 'timestamp', 'status'])
-
 
 def save_responses(df, backend):
     _, resp_path = _paths(backend)
@@ -64,13 +62,12 @@ def save_responses(df, backend):
     else:
         df.to_excel(resp_path, index=False)
 
-# --- Time Formatting Helper ---
 def format_time_str(t_str):
     try:
         t = datetime.fromisoformat(t_str).time()
     except Exception:
         parts = t_str.split(':')
-        t = time(int(parts[0]), int(parts[1]) if len(parts)>1 else 0)
+        t = time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
     h, m = t.hour, t.minute
     ampm = 'am' if h < 12 else 'pm'
     hr = h % 12 or 12
@@ -80,11 +77,9 @@ def format_time_str(t_str):
         return f"{hr} {ampm}"
     return f"{hr}:{m:02d} {ampm}"
 
-# --- RSVP Logic ---
 def add_response(backend, name, others, attend):
     df = load_responses(backend)
-    # Remove existing entry
-    df = df[df['name'] != name]
+    df = df[df['name'] != name]  # Remove existing entry
     status = '❌ Cancelled' if not attend else ''
     entry = {
         'name': name,
@@ -94,7 +89,6 @@ def add_response(backend, name, others, attend):
     }
     df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
     save_responses(df, backend)
-
 
 def update_statuses(backend):
     df = load_responses(backend).sort_values('timestamp')
@@ -116,7 +110,6 @@ def update_statuses(backend):
     df['status'] = statuses
     save_responses(df, backend)
 
-# --- Team Generation ---
 def generate_teams(backend):
     update_statuses(backend)
     df = load_responses(backend)
@@ -124,7 +117,7 @@ def generate_teams(backend):
     players = []
     for _, r in confirmed.iterrows():
         players.append(r['name'])
-        raw = r.get('others','')
+        raw = r.get('others', '')
         others = str(raw) if pd.notna(raw) else ''
         for o in others.split(','):
             if o.strip(): players.append(o.strip())
@@ -150,26 +143,23 @@ if section == '⚙️ Admin':
                 st.sidebar.error("Incorrect password")
     else:
         BACKEND = st.sidebar.selectbox("Data Backend", ['csv', 'excel'])
-        # Schedule Game
         st.subheader(":calendar: Schedule Game")
         game = load_game(BACKEND)
         with st.form("schedule_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
             with col1:
                 gd = st.date_input("Game Date", date.today() + timedelta(days=1))
-                start = st.time_input("Start Time", value=time(10,0))
+                start = st.time_input("Start Time", value=time(10, 0))
             with col2:
-                end = st.time_input("End Time", value=time(12,0))
+                end = st.time_input("End Time", value=time(12, 0))
                 loc = st.text_input("Location", value=DEFAULT_LOCATION)
             if st.form_submit_button("Save Schedule"):
                 save_game(BACKEND, gd.isoformat(), start.isoformat(), end.isoformat(), loc)
                 st.success("Schedule saved! 🏀")
-        # Display scheduled game
         if game:
-            start_fmt = format_time_str(game.get('start',''))
-            end_fmt = format_time_str(game.get('end',''))
-            st.markdown(f"**Date:** {game.get('date','')} — **{start_fmt} to {end_fmt}** @ **{game.get('location','')}**")
-        # RSVP Overview
+            start_fmt = format_time_str(game.get('start', ''))
+            end_fmt = format_time_str(game.get('end', ''))
+            st.markdown(f"**Date:** {game.get('date', '')} — **{start_fmt} to {end_fmt}** @ **{game.get('location', '')}**")
         st.subheader(":clipboard: RSVP Overview")
         df = load_responses(BACKEND)
         if df.empty:
@@ -185,17 +175,16 @@ if section == '⚙️ Admin':
             c2.metric("Waitlist", wait)
             c3.metric("Cancelled", canc)
             with st.expander("✅ Confirmed Players", expanded=True):
-                st.table(df[df['status']=='✅ Confirmed'][['name','others']])
+                st.table(df[df['status'] == '✅ Confirmed'][['name', 'others']])
             with st.expander("⏳ Waitlisted", expanded=False):
-                st.table(df[df['status']=='⏳ Waitlist'][['name','others']])
+                st.table(df[df['status'] == '⏳ Waitlist'][['name', 'others']])
             with st.expander("❌ Cancelled", expanded=False):
-                st.table(df[df['status']=='❌ Cancelled'][['name','others']])
-        # Generate teams
+                st.table(df[df['status'] == '❌ Cancelled'][['name', 'others']])
         if st.button("👥 Generate Teams"):
             teams = generate_teams(BACKEND)
             if teams:
                 st.success("Teams ready! 🎉")
-                for i, team in enumerate(teams,1):
+                for i, team in enumerate(teams, 1):
                     st.markdown(f"**Team {i}:** {', '.join(team)}")
             else:
                 st.warning("Not enough players to form teams 🤷‍♂️")
@@ -208,14 +197,50 @@ else:
     if not game:
         st.warning("No game scheduled. Check back later! 🗓️")
     else:
-        missing = [k for k in ['date','start','end','location'] if not game.get(k)]
-        if missing:
-            st.warning(f"Game info missing: {', '.join(missing)}")
-        date_str = game.get('date','')
-        start_fmt = format_time_str(game.get('start',''))
-        end_fmt = format_time_str(game.get('end',''))
-        loc = game.get('location','')
+        date_str = game.get('date', '')
+        start_fmt = format_time_str(game.get('start', ''))
+        end_fmt = format_time_str(game.get('end', ''))
+        loc = game.get('location', '')
         st.markdown(f"### Next Game: **{date_str}** from **{start_fmt}** to **{end_fmt}** @ **{loc}**")
+
+        # --- RSVP Summary ---
+        update_statuses(BACKEND)
+        df = load_responses(BACKEND)
+        conf = len(df[df['status'] == '✅ Confirmed'])
+        wait = len(df[df['status'] == '⏳ Waitlist'])
+        canc = len(df[df['status'] == '❌ Cancelled'])
+        total = conf + wait
+
+        st.markdown("## 📊 RSVP Summary")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("✅ Confirmed", conf)
+        col2.metric("⏳ Waitlist", wait)
+        col3.metric("❌ Cancelled", canc)
+
+        progress = min(conf / CAPACITY, 1.0)
+        st.progress(progress, text=f"{conf}/{CAPACITY} confirmed")
+
+        # --- Altair Visualization ---
+        chart_data = pd.DataFrame({
+            'Status': ['Confirmed', 'Waitlist', 'Cancelled'],
+            'Count': [conf, wait, canc]
+        })
+        color_map = {'Confirmed': '#4CAF50', 'Waitlist': '#FFC107', 'Cancelled': '#F44336'}
+
+        chart = alt.Chart(chart_data).mark_bar().encode(
+            y=alt.Y('Status:N', sort='-x', title=''),
+            x=alt.X('Count:Q', title='Number of Players'),
+            color=alt.Color('Status:N', scale=alt.Scale(domain=list(color_map.keys()), range=list(color_map.values()))),
+            tooltip=['Status:N', 'Count:Q']
+        ).properties(
+            width=500,
+            height=200,
+            title="RSVP Status Overview"
+        )
+
+        st.altair_chart(chart, use_container_width=True)
+
+        # --- RSVP Form ---
         try:
             deadline = datetime.fromisoformat(date_str).date() - timedelta(days=1)
             today = date.today()
@@ -223,13 +248,13 @@ else:
                 st.info(f"Voting open until **{deadline}** 🕒")
                 with st.form("rsvp_form"):
                     name = st.text_input("Your First Name", help="Please enter your first name only 🏷️")
-                    attend = st.select_slider("Will you attend?", options=["No ❌","Yes ✅"], value="Yes ✅")
+                    attend = st.select_slider("Will you attend?", options=["No ❌", "Yes ✅"], value="Yes ✅")
                     others = st.text_input("Additional Players Invite Name(s) (comma-separated) 👥")
                     if st.form_submit_button("Submit RSVP 🎫"):
                         if not name.strip():
                             st.error("Please enter your first name.")
                         else:
-                            add_response(BACKEND, name.strip(), others.strip(), attend=="Yes ✅")
+                            add_response(BACKEND, name.strip(), others.strip(), attend == "Yes ✅")
                             st.success("RSVP recorded! 🎉")
             else:
                 st.error(f"Voting closed on {deadline}. See you next time! 🚫")
