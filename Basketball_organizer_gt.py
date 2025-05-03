@@ -7,7 +7,7 @@ import altair as alt
 import time as t
 
 # --- Page Configuration ---
-st.set_page_config(page_title="🏀 Basketball Organiser", layout="wide")
+st.set_page_config(page_title="🏀 Basketball Organizer", layout="wide")
 
 # --- Constants ---
 CAPACITY = 15
