@@ -149,18 +149,18 @@ def show_admin_table(df, backend, status_filter):
             update_statuses(backend)
             st.toast("Capacity recalculated after restoring cancelled player.")
         st.success("Moved to Confirmed.")
-        st.experimental_rerun()
+        st.rerun()
     if c2.button(f"Move to Waitlist from {status_filter}"):
         df.loc[df['name'].isin(selected), 'status'] = '⏳ Waitlist'
         save_responses(df, backend)
         st.success("Moved to Waitlist.")
-        st.experimental_rerun()
+        st.rerun()
     if c3.button(f"Undo / Reset from {status_filter}"):
         df.loc[df['name'].isin(selected), 'status'] = ''
         save_responses(df, backend)
         update_statuses(backend)
         st.success("Status reset.")
-        st.experimental_rerun()
+        st.rerun()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -171,7 +171,7 @@ if section == '⚙️ Admin':
         if st.sidebar.button("Login"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_authenticated = True
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.sidebar.error("Incorrect password")
     else:
@@ -274,6 +274,6 @@ else:
                         add_response(BACKEND, name.strip(), others.strip(), attend == "Yes ✅")
                         update_statuses(BACKEND)
                         st.success("RSVP recorded!")
-                        st.experimental_rerun()
+                        st.rerun()
         else:
             st.error(f"RSVP closed on {deadline}. See you next time!")
