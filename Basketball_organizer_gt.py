@@ -4,7 +4,6 @@ import os
 from datetime import datetime, date, time, timedelta
 import random
 import altair as alt
-import time as t
 import io
 
 # --- Constants ---
@@ -16,7 +15,6 @@ CUTOFF_DAYS = 2  # RSVP closes 2 days before game
 # --- Page Config ---
 st.set_page_config(page_title="🏀 Basketball Organiser", layout="wide")
 
-# --- Session State ---
 if "admin_authenticated" not in st.session_state:
     st.session_state.admin_authenticated = False
 
@@ -80,7 +78,7 @@ def update_statuses(backend):
     for _, r in df.iterrows():
         current_status = r['status']
         if current_status in ['❌ Cancelled', '✅ Confirmed', '⏳ Waitlist']:
-            statuses.append(current_status)  # Preserve manual edits
+            statuses.append(current_status)  # preserve manual
         else:
             others = str(r.get('others', '') or '')
             extras = len([o for o in others.split(',') if o.strip()])
@@ -229,18 +227,27 @@ if section == '⚙️ Admin':
 
         st.subheader("👥 Generate Teams")
         conf_count = len(confirmed_df)
-        suggested_teams = 2 if conf_count <= 10 else (conf_count + 2) // 3
-        num_teams_input = st.number_input(f"Number of teams (default {suggested_teams})", min_value=2, max_value=conf_count, value=suggested_teams)
-        if st.button("Generate Teams"):
-            teams = generate_teams(BACKEND, num_teams=num_teams_input)
-            if teams:
-                st.success("Teams generated!")
-                for i, team in enumerate(teams, 1):
-                    st.markdown(f"**Team {i}:** {', '.join(team)}")
-                st.toast("Teams are ready! 📋")
-                st.balloons()
-            else:
-                st.warning("Not enough players to generate teams.")
+        if conf_count < 2:
+            st.warning("Not enough confirmed players to generate teams (need at least 2).")
+        else:
+            suggested_teams = min(2 if conf_count <= 10 else (conf_count + 2) // 3, conf_count)
+            num_teams_input = st.number_input(
+                f"Number of teams (default {suggested_teams})",
+                min_value=2,
+                max_value=conf_count,
+                value=suggested_teams,
+                step=1
+            )
+            if st.button("Generate Teams"):
+                teams = generate_teams(BACKEND, num_teams=num_teams_input)
+                if teams:
+                    st.success("Teams generated!")
+                    for i, team in enumerate(teams, 1):
+                        st.markdown(f"**Team {i}:** {', '.join(team)}")
+                    st.toast("Teams are ready! 📋")
+                    st.balloons()
+                else:
+                    st.warning("Not enough players to generate teams.")
 
         if st.button("🔄 Recalculate Statuses"):
             update_statuses(BACKEND)
