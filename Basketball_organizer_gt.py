@@ -11,7 +11,7 @@ import io
 CAPACITY = 15
 DEFAULT_LOCATION = "Main Court"
 ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
-CUTOFF_DAYS = 2  # Voting closes 2 days before game
+CUTOFF_DAYS = 2  # RSVP closes 2 days before game
 
 # --- Page Config ---
 st.set_page_config(page_title="🏀 Basketball Organiser", layout="wide")
@@ -93,7 +93,7 @@ def update_statuses(backend):
     df['status'] = statuses
     save_responses(df, backend)
 
-def generate_teams(backend):
+def generate_teams(backend, num_teams=None):
     update_statuses(backend)
     df = load_responses(backend)
     confirmed = df[df['status'] == '✅ Confirmed']
@@ -103,9 +103,11 @@ def generate_teams(backend):
         others = str(r.get('others', '') or '')
         for o in others.split(','):
             if o.strip(): players.append(o.strip())
-    if len(players) < 6:
+    if len(players) < 2:
         return None
-    num_teams = 2 if len(players) <= 10 else (len(players) + 2) // 3
+    if not num_teams:
+        num_teams = 2 if len(players) <= 10 else (len(players) + 2) // 3
+    num_teams = max(2, min(num_teams, len(players)))
     random.shuffle(players)
     teams = [[] for _ in range(num_teams)]
     for i, p in enumerate(players):
@@ -143,21 +145,22 @@ def show_admin_table(df, backend, status_filter):
     if c1.button(f"Move to Confirmed from {status_filter}"):
         df.loc[df['name'].isin(selected), 'status'] = '✅ Confirmed'
         save_responses(df, backend)
-        update_statuses(backend)
+        if status_filter == '❌ Cancelled':
+            update_statuses(backend)
+            st.toast("Capacity recalculated after restoring cancelled player.")
         st.success("Moved to Confirmed.")
-        st.rerun()
+        st.experimental_rerun()
     if c2.button(f"Move to Waitlist from {status_filter}"):
         df.loc[df['name'].isin(selected), 'status'] = '⏳ Waitlist'
         save_responses(df, backend)
-        update_statuses(backend)
         st.success("Moved to Waitlist.")
-        st.rerun()
-    if c3.button(f"Undo Cancel / Reset from {status_filter}"):
+        st.experimental_rerun()
+    if c3.button(f"Undo / Reset from {status_filter}"):
         df.loc[df['name'].isin(selected), 'status'] = ''
         save_responses(df, backend)
         update_statuses(backend)
         st.success("Status reset.")
-        st.rerun()
+        st.experimental_rerun()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -168,7 +171,7 @@ if section == '⚙️ Admin':
         if st.sidebar.button("Login"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_authenticated = True
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.sidebar.error("Incorrect password")
     else:
@@ -202,7 +205,7 @@ if section == '⚙️ Admin':
         st.subheader("❌ Cancelled Players")
         show_admin_table(df, BACKEND, '❌ Cancelled')
 
-        st.subheader("📥 Download RSVP List")
+        st.subheader("📥 Download RSVP List (all statuses)")
         csv = df.to_csv(index=False).encode('utf-8')
         excel = None
         if BACKEND == 'excel':
@@ -211,23 +214,37 @@ if section == '⚙️ Admin':
                 df.to_excel(writer, index=False)
             excel = buffer.getvalue()
         col1, col2 = st.columns(2)
-        col1.download_button("Download CSV", csv, "responses.csv", "text/csv")
+        col1.download_button("Download All CSV", csv, "responses.csv", "text/csv")
         if excel:
-            col2.download_button("Download Excel", excel, "responses.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            col2.download_button("Download All Excel", excel, "responses.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        if st.button("🔄 Recalculate Statuses"):
-            update_statuses(BACKEND)
-            st.success("Statuses recalculated.")
+        st.subheader("📥 Download Individual Status Lists")
+        confirmed_df = df[df['status'] == '✅ Confirmed']
+        waitlist_df = df[df['status'] == '⏳ Waitlist']
+        cancelled_df = df[df['status'] == '❌ Cancelled']
+        c1, c2, c3 = st.columns(3)
+        c1.download_button("Download Confirmed CSV", confirmed_df.to_csv(index=False).encode('utf-8'), "confirmed.csv", "text/csv")
+        c2.download_button("Download Waitlist CSV", waitlist_df.to_csv(index=False).encode('utf-8'), "waitlist.csv", "text/csv")
+        c3.download_button("Download Cancelled CSV", cancelled_df.to_csv(index=False).encode('utf-8'), "cancelled.csv", "text/csv")
 
-        if st.button("👥 Generate Teams"):
-            teams = generate_teams(BACKEND)
+        st.subheader("👥 Generate Teams")
+        conf_count = len(confirmed_df)
+        suggested_teams = 2 if conf_count <= 10 else (conf_count + 2) // 3
+        num_teams_input = st.number_input(f"Number of teams (default {suggested_teams})", min_value=2, max_value=conf_count, value=suggested_teams)
+        if st.button("Generate Teams"):
+            teams = generate_teams(BACKEND, num_teams=num_teams_input)
             if teams:
                 st.success("Teams generated!")
                 for i, team in enumerate(teams, 1):
                     st.markdown(f"**Team {i}:** {', '.join(team)}")
+                st.toast("Teams are ready! 📋")
                 st.balloons()
             else:
-                st.warning("Not enough players for teams.")
+                st.warning("Not enough players to generate teams.")
+
+        if st.button("🔄 Recalculate Statuses"):
+            update_statuses(BACKEND)
+            st.success("Statuses recalculated.")
 
 # --- RSVP PAGE ---
 else:
@@ -257,7 +274,6 @@ else:
                         add_response(BACKEND, name.strip(), others.strip(), attend == "Yes ✅")
                         update_statuses(BACKEND)
                         st.success("RSVP recorded!")
-                        st.rerun()
+                        st.experimental_rerun()
         else:
             st.error(f"RSVP closed on {deadline}. See you next time!")
-
