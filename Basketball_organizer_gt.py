@@ -10,7 +10,7 @@ import io
 CAPACITY = 15
 DEFAULT_LOCATION = "Main Court"
 ADMIN_PASSWORD = st.secrets["ADMIN_PASSWORD"]
-CUTOFF_DAYS = 2  # RSVP closes 2 days before game
+CUTOFF_DAYS = 1  # RSVP closes 1 day before event
 
 # --- Page Config ---
 st.set_page_config(page_title="🏀 Basketball Organiser", layout="wide")
@@ -22,30 +22,29 @@ st.sidebar.markdown("# 📜 Menu")
 section = st.sidebar.selectbox("Navigate to", ["🏀 RSVP", "⚙️ Admin"])
 
 # --- File Paths ---
-def _paths(backend):
-    return ('game.csv' if backend == 'csv' else 'game.xlsx',
-            'responses.csv' if backend == 'csv' else 'responses.xlsx')
+def _paths():
+    return ('game.csv', 'responses.csv')
 
-def load_game(backend):
-    game_path, _ = _paths(backend)
+def load_game():
+    game_path, _ = _paths()
     if os.path.exists(game_path):
-        return pd.read_csv(game_path) if backend == 'csv' else pd.read_excel(game_path)
+        return pd.read_csv(game_path)
     return pd.DataFrame()
 
-def save_game(backend, date_str, start_str, end_str, location):
+def save_game(date_str, start_str, end_str, location):
     df = pd.DataFrame([{'date': date_str, 'start': start_str, 'end': end_str, 'location': location}])
-    game_path, _ = _paths(backend)
-    df.to_csv(game_path, index=False) if backend == 'csv' else df.to_excel(game_path, index=False)
+    game_path, _ = _paths()
+    df.to_csv(game_path, index=False)
 
-def load_responses(backend):
-    _, resp_path = _paths(backend)
+def load_responses():
+    _, resp_path = _paths()
     if os.path.exists(resp_path):
-        return pd.read_csv(resp_path) if backend == 'csv' else pd.read_excel(resp_path)
+        return pd.read_csv(resp_path)
     return pd.DataFrame(columns=['name', 'others', 'timestamp', 'status'])
 
-def save_responses(df, backend):
-    _, resp_path = _paths(backend)
-    df.to_csv(resp_path, index=False) if backend == 'csv' else df.to_excel(resp_path, index=False)
+def save_responses(df):
+    _, resp_path = _paths()
+    df.to_csv(resp_path, index=False)
 
 # --- Utilities ---
 def format_time_str(t_str):
@@ -63,16 +62,16 @@ def format_time_str(t_str):
         return f"{hr} {ampm}"
     return f"{hr}:{m:02d} {ampm}"
 
-def add_response(backend, name, others, attend):
-    df = load_responses(backend)
+def add_response(name, others, attend):
+    df = load_responses()
     df = df[df['name'] != name]
     status = '❌ Cancelled' if not attend else ''
     entry = {'name': name, 'others': others, 'timestamp': datetime.utcnow().isoformat(), 'status': status}
     df = pd.concat([df, pd.DataFrame([entry])], ignore_index=True)
-    save_responses(df, backend)
+    save_responses(df)
 
-def update_statuses(backend):
-    df = load_responses(backend).sort_values('timestamp')
+def update_statuses():
+    df = load_responses().sort_values('timestamp')
     cum = 0
     statuses = []
     for _, r in df.iterrows():
@@ -81,7 +80,7 @@ def update_statuses(backend):
             statuses.append(current_status)  # preserve manual
         else:
             others = str(r.get('others', '') or '')
-            extras = len([o for o in others.split(',') if o.strip()])
+            extras = len([o.strip() for o in others.split(',') if o.strip()])
             parts = 1 + extras
             if cum + parts <= CAPACITY:
                 statuses.append('✅ Confirmed')
@@ -89,11 +88,11 @@ def update_statuses(backend):
             else:
                 statuses.append('⏳ Waitlist')
     df['status'] = statuses
-    save_responses(df, backend)
+    save_responses(df)
 
-def generate_teams(backend, num_teams=None):
-    update_statuses(backend)
-    df = load_responses(backend)
+def generate_teams(num_teams=None):
+    update_statuses()
+    df = load_responses()
     confirmed = df[df['status'] == '✅ Confirmed']
     players = []
     for _, r in confirmed.iterrows():
@@ -132,33 +131,33 @@ def show_metrics_and_chart(df):
     ).properties(width=500, height=200)
     st.altair_chart(chart, use_container_width=True)
 
-def show_admin_table(df, backend, status_filter):
+def show_admin_tab(df, status_filter):
     filtered = df[df['status'] == status_filter][['name', 'others']].reset_index(drop=True)
-    if filtered.empty:
-        st.info(f"No {status_filter} players.")
-        return
-    selected = st.multiselect(f"Select {status_filter} players to modify:", filtered['name'].tolist())
     st.table(filtered)
-    c1, c2, c3 = st.columns(3)
-    if c1.button(f"Move to Confirmed from {status_filter}"):
+    selected = st.multiselect(f"Select from {status_filter}", filtered['name'].tolist(), key=status_filter)
+    col1, col2, col3, col4 = st.columns(4)
+    if col1.button(f"Move ➡️ Confirmed ({status_filter})", key=f"{status_filter}_c"):
         df.loc[df['name'].isin(selected), 'status'] = '✅ Confirmed'
-        save_responses(df, backend)
         if status_filter == '❌ Cancelled':
-            update_statuses(backend)
-            st.toast("Capacity recalculated after restoring cancelled player.")
-        st.success("Moved to Confirmed.")
-        st.rerun()
-    if c2.button(f"Move to Waitlist from {status_filter}"):
+            update_statuses()
+        save_responses(df)
+        st.toast("Moved to Confirmed.")
+        st.experimental_rerun()
+    if col2.button(f"Move ➡️ Waitlist ({status_filter})", key=f"{status_filter}_w"):
         df.loc[df['name'].isin(selected), 'status'] = '⏳ Waitlist'
-        save_responses(df, backend)
-        st.success("Moved to Waitlist.")
-        st.rerun()
-    if c3.button(f"Undo / Reset from {status_filter}"):
-        df.loc[df['name'].isin(selected), 'status'] = ''
-        save_responses(df, backend)
-        update_statuses(backend)
-        st.success("Status reset.")
-        st.rerun()
+        save_responses(df)
+        st.toast("Moved to Waitlist.")
+        st.experimental_rerun()
+    if col3.button(f"Move ➡️ Cancelled ({status_filter})", key=f"{status_filter}_x"):
+        df.loc[df['name'].isin(selected), 'status'] = '❌ Cancelled'
+        save_responses(df)
+        st.toast("Moved to Cancelled.")
+        st.experimental_rerun()
+    if col4.button(f"🗑️ Remove ({status_filter})", key=f"{status_filter}_rm"):
+        df.drop(df[df['name'].isin(selected)].index, inplace=True)
+        save_responses(df)
+        st.toast(f"Removed from {status_filter}.")
+        st.experimental_rerun()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -169,12 +168,11 @@ if section == '⚙️ Admin':
         if st.sidebar.button("Login"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_authenticated = True
-                st.rerun()
+                st.experimental_rerun()
             else:
                 st.sidebar.error("Incorrect password")
     else:
-        BACKEND = st.sidebar.selectbox("Data Backend", ['csv', 'excel'])
-        game_df = load_game(BACKEND)
+        game_df = load_game()
         st.subheader(":calendar: Schedule Game")
         with st.form("schedule_form", clear_on_submit=True):
             col1, col2 = st.columns(2)
@@ -185,90 +183,60 @@ if section == '⚙️ Admin':
                 end = st.time_input("End Time", value=time(12))
                 loc = st.text_input("Location", DEFAULT_LOCATION)
             if st.form_submit_button("Save Schedule"):
-                save_game(BACKEND, gd.isoformat(), start.isoformat(), end.isoformat(), loc)
+                save_game(gd.isoformat(), start.isoformat(), end.isoformat(), loc)
                 st.success("Schedule saved!")
 
         if not game_df.empty:
             game = game_df.iloc[0].to_dict()
             st.markdown(f"**Date:** {game['date']} — **{format_time_str(game['start'])} to {format_time_str(game['end'])}** @ **{game['location']}**")
 
+        df = load_responses()
         st.subheader(":clipboard: RSVP Overview")
-        df = load_responses(BACKEND)
         show_metrics_and_chart(df)
 
-        st.subheader("✅ Confirmed Players")
-        show_admin_table(df, BACKEND, '✅ Confirmed')
-        st.subheader("⏳ Waitlist Players")
-        show_admin_table(df, BACKEND, '⏳ Waitlist')
-        st.subheader("❌ Cancelled Players")
-        show_admin_table(df, BACKEND, '❌ Cancelled')
+        with st.expander("📝 Manage Players"):
+            tabs = st.tabs(["✅ Confirmed", "⏳ Waitlist", "❌ Cancelled"])
+            for i, status in enumerate(['✅ Confirmed', '⏳ Waitlist', '❌ Cancelled']):
+                with tabs[i]:
+                    show_admin_tab(df, status)
 
-        st.subheader("📥 Download RSVP List (all statuses)")
+        st.subheader("📥 Download RSVP")
         csv = df.to_csv(index=False).encode('utf-8')
-        excel = None
-        if BACKEND == 'excel':
-            buffer = io.BytesIO()
-            with pd.ExcelWriter(buffer) as writer:
-                df.to_excel(writer, index=False)
-            excel = buffer.getvalue()
-        col1, col2 = st.columns(2)
-        col1.download_button("Download All CSV", csv, "responses.csv", "text/csv")
-        if excel:
-            col2.download_button("Download All Excel", excel, "responses.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        st.download_button("Download All CSV", csv, "responses.csv", "text/csv")
 
-        st.subheader("📥 Download Individual Status Lists")
         confirmed_df = df[df['status'] == '✅ Confirmed']
-        waitlist_df = df[df['status'] == '⏳ Waitlist']
-        cancelled_df = df[df['status'] == '❌ Cancelled']
-        c1, c2, c3 = st.columns(3)
-        c1.download_button("Download Confirmed CSV", confirmed_df.to_csv(index=False).encode('utf-8'), "confirmed.csv", "text/csv")
-        c2.download_button("Download Waitlist CSV", waitlist_df.to_csv(index=False).encode('utf-8'), "waitlist.csv", "text/csv")
-        c3.download_button("Download Cancelled CSV", cancelled_df.to_csv(index=False).encode('utf-8'), "cancelled.csv", "text/csv")
-
-        st.subheader("👥 Generate Teams")
         conf_count = len(confirmed_df)
-        if conf_count < 2:
-            st.warning("Not enough confirmed players to generate teams (need at least 2).")
-        else:
-            suggested_teams = min(2 if conf_count <= 10 else (conf_count + 2) // 3, conf_count)
-            num_teams_input = st.number_input(
-                f"Number of teams (default {suggested_teams})",
-                min_value=2,
-                max_value=conf_count,
-                value=suggested_teams,
-                step=1
-            )
+        if conf_count >= 2:
+            st.subheader("👥 Generate Teams")
+            suggested_teams = min(2 if conf_count <= 10 else (conf_count + 2)//3, conf_count)
+            num_teams_input = st.number_input("Number of teams", min_value=2, max_value=conf_count, value=suggested_teams)
             if st.button("Generate Teams"):
-                teams = generate_teams(BACKEND, num_teams=num_teams_input)
+                teams = generate_teams(num_teams_input)
                 if teams:
-                    st.success("Teams generated!")
                     for i, team in enumerate(teams, 1):
                         st.markdown(f"**Team {i}:** {', '.join(team)}")
-                    st.toast("Teams are ready! 📋")
+                    st.toast("Teams ready!")
                     st.balloons()
                 else:
-                    st.warning("Not enough players to generate teams.")
-
-        if st.button("🔄 Recalculate Statuses"):
-            update_statuses(BACKEND)
-            st.success("Statuses recalculated.")
+                    st.warning("Not enough players.")
+        else:
+            st.warning("Not enough confirmed players to generate teams.")
 
 # --- RSVP PAGE ---
 else:
     st.title(":basketball: RSVP & Game Details")
-    BACKEND = 'csv'
-    game_df = load_game(BACKEND)
+    game_df = load_game()
     if game_df.empty:
-        st.warning("No game scheduled. Check back later!")
+        st.warning("No game scheduled.")
     else:
         game = game_df.iloc[0].to_dict()
         date_str = game['date']
         deadline = datetime.fromisoformat(date_str).date() - timedelta(days=CUTOFF_DAYS)
         today = date.today()
         st.markdown(f"### Next Game: **{date_str}** from **{format_time_str(game['start'])}** to **{format_time_str(game['end'])}** @ **{game['location']}**")
-        df = load_responses(BACKEND)
+        df = load_responses()
         show_metrics_and_chart(df)
-        if today <= deadline:
+        if today < deadline:
             st.info(f"RSVP open until **{deadline}** 🕒")
             with st.form("rsvp_form"):
                 name = st.text_input("Your First Name")
@@ -278,9 +246,9 @@ else:
                     if not name.strip():
                         st.error("Name is required.")
                     else:
-                        add_response(BACKEND, name.strip(), others.strip(), attend == "Yes ✅")
-                        update_statuses(BACKEND)
+                        add_response(name.strip(), others.strip(), attend == "Yes ✅")
+                        update_statuses()
                         st.success("RSVP recorded!")
-                        st.rerun()
+                        st.experimental_rerun()
         else:
             st.error(f"RSVP closed on {deadline}. See you next time!")
