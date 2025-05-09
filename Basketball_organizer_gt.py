@@ -142,22 +142,22 @@ def show_admin_tab(df, status_filter):
             update_statuses()
         save_responses(df)
         st.toast("Moved to Confirmed.")
-        st.experimental_rerun()
+        st.rerun()
     if col2.button(f"Move ➡️ Waitlist ({status_filter})", key=f"{status_filter}_w"):
         df.loc[df['name'].isin(selected), 'status'] = '⏳ Waitlist'
         save_responses(df)
         st.toast("Moved to Waitlist.")
-        st.experimental_rerun()
+        st.rerun()
     if col3.button(f"Move ➡️ Cancelled ({status_filter})", key=f"{status_filter}_x"):
         df.loc[df['name'].isin(selected), 'status'] = '❌ Cancelled'
         save_responses(df)
         st.toast("Moved to Cancelled.")
-        st.experimental_rerun()
+        st.rerun()
     if col4.button(f"🗑️ Remove ({status_filter})", key=f"{status_filter}_rm"):
         df.drop(df[df['name'].isin(selected)].index, inplace=True)
         save_responses(df)
         st.toast(f"Removed from {status_filter}.")
-        st.experimental_rerun()
+        st.rerun()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -168,7 +168,7 @@ if section == '⚙️ Admin':
         if st.sidebar.button("Login"):
             if pwd == ADMIN_PASSWORD:
                 st.session_state.admin_authenticated = True
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.sidebar.error("Incorrect password")
     else:
@@ -249,6 +249,6 @@ else:
                         add_response(name.strip(), others.strip(), attend == "Yes ✅")
                         update_statuses()
                         st.success("RSVP recorded!")
-                        st.experimental_rerun()
+                        st.rerun()
         else:
             st.error(f"RSVP closed on {deadline}. See you next time!")
