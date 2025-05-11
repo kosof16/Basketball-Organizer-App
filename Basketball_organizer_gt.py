@@ -224,7 +224,7 @@ if section == '⚙️ Admin':
 
 # --- RSVP PAGE ---
 else:
-    st.title(":basketball: RSVP & Game Details")
+    st.title(":basketball: RSVP & Basketball Game Details")
     game_df = load_game()
     if game_df.empty:
         st.warning("No game scheduled.")
