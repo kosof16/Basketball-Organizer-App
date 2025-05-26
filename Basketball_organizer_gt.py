@@ -4,68 +4,26 @@ import os
 from datetime import datetime, date, time, timedelta
 import random
 import altair as alt
+import psycopg2
+from psycopg2.extras import RealDictCursor
+import bcrypt
 import json
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import Flow
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
+import io
 import logging
-from typing import Optional, Dict, List, Any
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# Initialize availability flags
-DB_AVAILABLE = False
-SQLITE_AVAILABLE = False
-BCRYPT_AVAILABLE = False
-GOOGLE_DRIVE_AVAILABLE = False
-
-# Try to import PostgreSQL driver with fallbacks
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    DB_AVAILABLE = True
-    logger.info("PostgreSQL driver loaded successfully")
-except ImportError as e:
-    logger.warning(f"PostgreSQL driver not available: {e}")
-    # Try SQLite fallback
-    try:
-        import sqlite3
-        SQLITE_AVAILABLE = True
-        logger.info("SQLite available as fallback")
-    except ImportError:
-        logger.error("No database drivers available")
-
-# Try to import bcrypt with fallback
-try:
-    import bcrypt
-    BCRYPT_AVAILABLE = True
-    logger.info("bcrypt available")
-except ImportError:
-    logger.warning("bcrypt not available, using basic password comparison")
-
-# Try to import Google Drive dependencies
-try:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
-    import io
-    GOOGLE_DRIVE_AVAILABLE = True
-    logger.info("Google Drive integration available")
-except ImportError as e:
-    logger.warning(f"Google Drive integration not available: {e}")
 
 # --- Constants ---
 CAPACITY = int(os.getenv('GAME_CAPACITY', '15'))
 DEFAULT_LOCATION = "Main Court"
 CUTOFF_DAYS = int(os.getenv('RSVP_CUTOFF_DAYS', '1'))
 SESSION_TIMEOUT_MINUTES = 30
-
-# Data storage directory for fallback
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    try:
-        os.makedirs(DATA_DIR)
-    except:
-        pass  # Might not have write permissions in cloud
 
 # --- Page Config ---
 st.set_page_config(page_title="🏀 Basketball Organiser", layout="wide")
@@ -75,345 +33,298 @@ if "admin_authenticated" not in st.session_state:
     st.session_state.admin_authenticated = False
 if "admin_login_time" not in st.session_state:
     st.session_state.admin_login_time = None
-if "use_fallback_storage" not in st.session_state:
-    st.session_state.use_fallback_storage = True
-if "current_game" not in st.session_state:
-    st.session_state.current_game = None
-if "responses" not in st.session_state:
-    st.session_state.responses = []
-
-# --- Fallback File Storage Functions ---
-def save_json(filename: str, data: Any) -> bool:
-    """Save data to JSON file"""
-    try:
-        filepath = os.path.join(DATA_DIR, filename)
-        with open(filepath, 'w') as f:
-            json.dump(data, f, default=str, indent=2)
-        return True
-    except Exception as e:
-        logger.error(f"Error saving {filename}: {e}")
-        return False
-
-def load_json(filename: str) -> Any:
-    """Load data from JSON file"""
-    try:
-        filepath = os.path.join(DATA_DIR, filename)
-        if os.path.exists(filepath):
-            with open(filepath, 'r') as f:
-                return json.load(f)
-    except Exception as e:
-        logger.error(f"Error loading {filename}: {e}")
-    return {}
 
 # --- Database Configuration ---
 @st.cache_resource
 def init_connection():
-    """Initialize database connection with fallbacks"""
-    # Try PostgreSQL first if available and configured
-    if DB_AVAILABLE:
-        try:
-            # Check if database secrets are available
-            if "database" in st.secrets:
-                conn = psycopg2.connect(
-                    host=st.secrets["database"]["host"],
-                    database=st.secrets["database"]["dbname"],
-                    user=st.secrets["database"]["user"],
-                    password=st.secrets["database"]["password"],
-                    port=st.secrets["database"]["port"],
-                    connect_timeout=10  # Add timeout
-                )
-                logger.info("PostgreSQL connection established")
-                return conn, "postgresql"
-            else:
-                logger.warning("Database secrets not configured")
-        except Exception as e:
-            logger.error(f"PostgreSQL connection failed: {e}")
-    
-    # Try SQLite fallback if available
-    if SQLITE_AVAILABLE:
-        try:
-            conn = sqlite3.connect(':memory:', check_same_thread=False)  # Use in-memory DB
-            logger.info("SQLite in-memory connection established")
-            return conn, "sqlite"
-        except Exception as e:
-            logger.error(f"SQLite connection failed: {e}")
-    
-    # No database available - use session state
-    logger.warning("No database available, using session state storage")
-    return None, "session"
+    """Initialize PostgreSQL connection"""
+    try:
+        # Use Streamlit secrets for database configuration
+        conn = psycopg2.connect(
+            host=st.secrets["database"]["host"],
+            database=st.secrets["database"]["dbname"],
+            user=st.secrets["database"]["user"],
+            password=st.secrets["database"]["password"],
+            port=st.secrets["database"]["port"]
+        )
+        return conn
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
+        return None
 
 def create_tables():
-    """Create necessary database tables with fallback support"""
-    conn_info = init_connection()
-    if not conn_info[0]:
-        # No database - use session state
-        logger.info("Using session state for data storage")
-        return True
-    
-    conn, db_type = conn_info
-    
-    if db_type == "session":
-        return True
+    """Create necessary database tables"""
+    conn = init_connection()
+    if not conn:
+        return False
     
     try:
         cur = conn.cursor()
         
-        if db_type == "postgresql":
-            # PostgreSQL specific SQL
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS games (
-                    id SERIAL PRIMARY KEY,
-                    game_date DATE NOT NULL,
-                    start_time TIME NOT NULL,
-                    end_time TIME NOT NULL,
-                    location VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            """)
-            
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS responses (
-                    id SERIAL PRIMARY KEY,
-                    game_id INTEGER REFERENCES games(id),
-                    name VARCHAR(255) NOT NULL,
-                    others TEXT,
-                    status VARCHAR(50) DEFAULT '',
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
-            """)
-            
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS admin_users (
-                    id SERIAL PRIMARY KEY,
-                    username VARCHAR(100) UNIQUE NOT NULL,
-                    password_hash VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_login TIMESTAMP
-                )
-            """)
-            
-        else:  # SQLite
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_date DATE NOT NULL,
-                    start_time TIME NOT NULL,
-                    end_time TIME NOT NULL,
-                    location TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            """)
-            
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS responses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id INTEGER,
-                    name TEXT NOT NULL,
-                    others TEXT,
-                    status TEXT DEFAULT '',
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (game_id) REFERENCES games(id)
-                )
-            """)
-            
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS admin_users (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    username TEXT UNIQUE NOT NULL,
-                    password_hash TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    last_login TIMESTAMP
-                )
-            """)
+        # Games table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS games (
+                id SERIAL PRIMARY KEY,
+                game_date DATE NOT NULL,
+                start_time TIME NOT NULL,
+                end_time TIME NOT NULL,
+                location VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                is_active BOOLEAN DEFAULT TRUE
+            )
+        """)
+        
+        # Responses table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS responses (
+                id SERIAL PRIMARY KEY,
+                game_id INTEGER REFERENCES games(id),
+                name VARCHAR(255) NOT NULL,
+                others TEXT,
+                status VARCHAR(50) DEFAULT '',
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        
+        # Admin users table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS admin_users (
+                id SERIAL PRIMARY KEY,
+                username VARCHAR(100) UNIQUE NOT NULL,
+                password_hash VARCHAR(255) NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_login TIMESTAMP
+            )
+        """)
+        
+        # Audit log table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id SERIAL PRIMARY KEY,
+                admin_user VARCHAR(100),
+                action VARCHAR(255),
+                details TEXT,
+                timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
         
         conn.commit()
         cur.close()
         return True
     except Exception as e:
         logger.error(f"Error creating tables: {e}")
-        if conn:
-            conn.rollback()
+        conn.rollback()
         return False
     finally:
-        if conn and db_type != "session":
-            conn.close()
+        conn.close()
 
-# --- Session State Functions (Fallback) ---
-def save_game_session(game_date, start_time, end_time, location):
-    """Save game to session state"""
-    game_data = {
-        'id': 1,
-        'game_date': game_date.isoformat() if hasattr(game_date, 'isoformat') else str(game_date),
-        'start_time': start_time.isoformat() if hasattr(start_time, 'isoformat') else str(start_time),
-        'end_time': end_time.isoformat() if hasattr(end_time, 'isoformat') else str(end_time),
-        'location': location,
-        'created_at': datetime.now().isoformat(),
-        'is_active': True
-    }
-    st.session_state.current_game = game_data
-    return True
-
-def load_current_game_session():
-    """Load current game from session state"""
-    return st.session_state.get('current_game')
-
-def add_response_session(name, others, attend, game_id):
-    """Add response to session state"""
-    status = '❌ Cancelled' if not attend else ''
-    
-    # Check if response exists
-    existing_idx = None
-    for i, resp in enumerate(st.session_state.responses):
-        if resp['name'].lower() == name.lower():
-            existing_idx = i
-            break
-    
-    response_data = {
-        'id': len(st.session_state.responses) + 1,
-        'game_id': game_id,
-        'name': name,
-        'others': others,
-        'status': status,
-        'timestamp': datetime.now().isoformat(),
-        'updated_at': datetime.now().isoformat()
-    }
-    
-    if existing_idx is not None:
-        st.session_state.responses[existing_idx] = response_data
-    else:
-        st.session_state.responses.append(response_data)
-    
-    return True
-
-def load_responses_session(game_id):
-    """Load responses from session state"""
-    responses = [r for r in st.session_state.responses if r.get('game_id') == game_id]
-    return pd.DataFrame(responses)
-
-# --- Authentication Functions ---
-def hash_password(password: str) -> str:
-    """Hash password using bcrypt or fallback"""
-    if BCRYPT_AVAILABLE:
-        return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
-    else:
-        import hashlib
-        return hashlib.sha256(password.encode()).hexdigest()
-
-def verify_password(password: str, hashed: str) -> bool:
-    """Verify password against hash"""
-    if BCRYPT_AVAILABLE:
-        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
-    else:
-        import hashlib
-        return hashlib.sha256(password.encode()).hexdigest() == hashed
-
-def authenticate_admin(username: str, password: str) -> bool:
-    """Robust authentication with multiple fallbacks and debugging"""
-    
-    # Input validation
-    if not username or not password:
-        return False
-    
-    # Clean inputs
-    clean_username = str(username).strip().lower()
-    clean_password = str(password).strip()
-    
-    # Check username
-    if clean_username != "admin":
-        return False
-    
-    # Try to get stored password with multiple methods
-    stored_password = None
-    
-    try:
-        # Method 1: Direct access
-        if hasattr(st, 'secrets') and "admin_password" in st.secrets:
-            stored_password = str(st.secrets["admin_password"]).strip()
-        
-        # Method 2: Get method
-        elif hasattr(st, 'secrets'):
-            stored_password = str(st.secrets.get("admin_password", "")).strip()
-        
-        # Method 3: Environment variable
-        if not stored_password:
-            import os
-            stored_password = os.getenv('ADMIN_PASSWORD', '').strip()
-        
-        # Method 4: Fallback for development
-        if not stored_password:
-            stored_password = "admin123"  # Default for testing
-            
-    except Exception as e:
-        # Emergency fallback
-        stored_password = "admin123"
-    
-    # Compare passwords
-    password_match = clean_password == stored_password
-    
-    return password_match
-
-# Update your login section to use the fixed function
-if section == '⚙️ Admin':
-    st.title(":gear: Admin Dashboard")
-    
-    if not st.session_state.admin_authenticated:
-        st.sidebar.markdown("## Admin Login 🔒")
-        username = st.sidebar.text_input("Username", value="admin")
-        password = st.sidebar.text_input("Password", type="password")
-        
-        # Add debug option
-        show_debug = st.sidebar.checkbox("Show debug info")
-        
-        if st.sidebar.button("Login"):
-            if show_debug:
-                # Show debug information
-                st.sidebar.write("🔍 Debug Info:")
-                try:
-                    if "admin_password" in st.secrets:
-                        stored_pwd = str(st.secrets["admin_password"])
-                        st.sidebar.write(f"Stored password length: {len(stored_pwd)}")
-                        st.sidebar.write(f"Entered password length: {len(password)}")
-                        st.sidebar.write(f"Passwords match: {password.strip() == stored_pwd.strip()}")
-                    else:
-                        st.sidebar.error("admin_password not in secrets")
-                except Exception as e:
-                    st.sidebar.error(f"Error: {e}")
-            
-            if authenticate_admin(username, password):
-                st.session_state.admin_authenticated = True
-                st.session_state.admin_login_time = datetime.now()
-                st.success("Login successful!")
-                st.rerun()
-            else:
-                st.sidebar.error("Invalid credentials")
-
-# --- Main Database Functions with Fallbacks ---
-def save_game(game_date, start_time, end_time, location) -> bool:
-    """Save game with fallback to session state"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
-        return save_game_session(game_date, start_time, end_time, location)
-    
-    conn, db_type = conn_info
+def log_admin_action(admin_user, action, details=""):
+    """Log admin actions for audit trail"""
+    conn = init_connection()
+    if not conn:
+        return
     
     try:
         cur = conn.cursor()
-        if db_type == "postgresql":
-            cur.execute("UPDATE games SET is_active = FALSE WHERE is_active = TRUE")
+        cur.execute("""
+            INSERT INTO audit_log (admin_user, action, details)
+            VALUES (%s, %s, %s)
+        """, (admin_user, action, details))
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error(f"Error logging admin action: {e}")
+    finally:
+        conn.close()
+
+# --- Google Drive Integration ---
+class GoogleDriveBackup:
+    def __init__(self):
+        self.service = None
+        self.folder_id = st.secrets.get("google_drive", {}).get("backup_folder_id")
+    
+    def authenticate(self):
+        """Authenticate with Google Drive API"""
+        try:
+            # Use service account credentials stored in secrets
+            credentials_info = st.secrets["google_drive"]["service_account"]
+            from google.oauth2 import service_account
+            
+            credentials = service_account.Credentials.from_service_account_info(
+                credentials_info,
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+            
+            self.service = build('drive', 'v3', credentials=credentials)
+            return True
+        except Exception as e:
+            logger.error(f"Google Drive authentication failed: {e}")
+            return False
+    
+    def backup_database(self):
+        """Create backup of database and upload to Google Drive"""
+        if not self.authenticate():
+            return False
+        
+        try:
+            # Export database data
+            backup_data = self.export_database_data()
+            
+            # Create backup file
+            backup_content = json.dumps(backup_data, indent=2, default=str)
+            backup_file = io.BytesIO(backup_content.encode())
+            
+            # Upload to Google Drive
+            filename = f"basketball_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            
+            media = MediaIoBaseUpload(backup_file, mimetype='application/json')
+            
+            file_metadata = {
+                'name': filename,
+                'parents': [self.folder_id] if self.folder_id else []
+            }
+            
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            
+            logger.info(f"Backup uploaded successfully: {file.get('id')}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Backup failed: {e}")
+            return False
+    
+    def export_database_data(self):
+        """Export all database data for backup"""
+        conn = init_connection()
+        if not conn:
+            return {}
+        
+        try:
+            cur = conn.cursor(cursor_factory=RealDictCursor)
+            
+            backup_data = {
+                'backup_timestamp': datetime.now().isoformat(),
+                'games': [],
+                'responses': [],
+                'audit_log': []
+            }
+            
+            # Export games
+            cur.execute("SELECT * FROM games WHERE is_active = TRUE")
+            backup_data['games'] = [dict(row) for row in cur.fetchall()]
+            
+            # Export responses
+            cur.execute("SELECT * FROM responses")
+            backup_data['responses'] = [dict(row) for row in cur.fetchall()]
+            
+            # Export recent audit log (last 30 days)
             cur.execute("""
-                INSERT INTO games (game_date, start_time, end_time, location)
-                VALUES (%s, %s, %s, %s)
-            """, (game_date, start_time, end_time, location))
-        else:  # SQLite
-            cur.execute("UPDATE games SET is_active = 0 WHERE is_active = 1")
-            cur.execute("""
-                INSERT INTO games (game_date, start_time, end_time, location)
-                VALUES (?, ?, ?, ?)
-            """, (game_date.isoformat(), start_time.isoformat(), end_time.isoformat(), location))
+                SELECT * FROM audit_log 
+                WHERE timestamp > %s 
+                ORDER BY timestamp DESC
+            """, (datetime.now() - timedelta(days=30),))
+            backup_data['audit_log'] = [dict(row) for row in cur.fetchall()]
+            
+            cur.close()
+            return backup_data
+            
+        except Exception as e:
+            logger.error(f"Database export failed: {e}")
+            return {}
+        finally:
+            conn.close()
+
+# --- Authentication Functions ---
+def hash_password(password):
+    """Hash password using bcrypt"""
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password, hashed):
+    """Verify password against hash"""
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def create_admin_user(username, password):
+    """Create new admin user"""
+    conn = init_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        password_hash = hash_password(password)
+        cur.execute("""
+            INSERT INTO admin_users (username, password_hash)
+            VALUES (%s, %s)
+            ON CONFLICT (username) DO UPDATE SET password_hash = %s
+        """, (username, password_hash, password_hash))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error creating admin user: {e}")
+        return False
+    finally:
+        conn.close()
+
+def authenticate_admin(username, password):
+    """Authenticate admin user"""
+    conn = init_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT password_hash FROM admin_users WHERE username = %s", (username,))
+        result = cur.fetchone()
+        
+        if result and verify_password(password, result[0]):
+            # Update last login
+            cur.execute("UPDATE admin_users SET last_login = %s WHERE username = %s", 
+                       (datetime.now(), username))
+            conn.commit()
+            cur.close()
+            return True
+        
+        cur.close()
+        return False
+    except Exception as e:
+        logger.error(f"Authentication error: {e}")
+        return False
+    finally:
+        conn.close()
+
+def check_session_timeout():
+    """Check if admin session has timed out"""
+    if (st.session_state.admin_authenticated and 
+        st.session_state.admin_login_time and
+        datetime.now() - st.session_state.admin_login_time > timedelta(minutes=SESSION_TIMEOUT_MINUTES)):
+        st.session_state.admin_authenticated = False
+        st.session_state.admin_login_time = None
+        st.warning("Session expired. Please log in again.")
+        st.rerun()
+
+# --- Database Functions ---
+def save_game(game_date, start_time, end_time, location):
+    """Save game to database"""
+    conn = init_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        # Deactivate previous games
+        cur.execute("UPDATE games SET is_active = FALSE WHERE is_active = TRUE")
+        
+        # Insert new game
+        cur.execute("""
+            INSERT INTO games (game_date, start_time, end_time, location)
+            VALUES (%s, %s, %s, %s)
+        """, (game_date, start_time, end_time, location))
         
         conn.commit()
         cur.close()
@@ -424,23 +335,15 @@ def save_game(game_date, start_time, end_time, location) -> bool:
     finally:
         conn.close()
 
-def load_current_game() -> Optional[Dict]:
-    """Load current game with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
-        return load_current_game_session()
-    
-    conn, db_type = conn_info
+def load_current_game():
+    """Load current active game"""
+    conn = init_connection()
+    if not conn:
+        return None
     
     try:
-        if db_type == "postgresql":
-            cur = conn.cursor(cursor_factory=RealDictCursor)
-            cur.execute("SELECT * FROM games WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 1")
-        else:  # SQLite
-            cur = conn.cursor()
-            cur.row_factory = sqlite3.Row
-            cur.execute("SELECT * FROM games WHERE is_active = 1 ORDER BY created_at DESC LIMIT 1")
-        
+        cur = conn.cursor(cursor_factory=RealDictCursor)
+        cur.execute("SELECT * FROM games WHERE is_active = TRUE ORDER BY created_at DESC LIMIT 1")
         result = cur.fetchone()
         cur.close()
         return dict(result) if result else None
@@ -450,48 +353,33 @@ def load_current_game() -> Optional[Dict]:
     finally:
         conn.close()
 
-def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
-    """Add response with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
-        return add_response_session(name, others, attend, game_id)
-    
-    conn, db_type = conn_info
+def add_response(name, others, attend, game_id):
+    """Add or update RSVP response"""
+    conn = init_connection()
+    if not conn:
+        return False
     
     try:
         cur = conn.cursor()
         status = '❌ Cancelled' if not attend else ''
         
-        if db_type == "postgresql":
-            cur.execute("SELECT id FROM responses WHERE name = %s AND game_id = %s", (name, game_id))
-            existing = cur.fetchone()
-            
-            if existing:
-                cur.execute("""
-                    UPDATE responses 
-                    SET others = %s, status = %s, updated_at = %s
-                    WHERE id = %s
-                """, (others, status, datetime.now(), existing[0]))
-            else:
-                cur.execute("""
-                    INSERT INTO responses (game_id, name, others, status)
-                    VALUES (%s, %s, %s, %s)
-                """, (game_id, name, others, status))
-        else:  # SQLite
-            cur.execute("SELECT id FROM responses WHERE name = ? AND game_id = ?", (name, game_id))
-            existing = cur.fetchone()
-            
-            if existing:
-                cur.execute("""
-                    UPDATE responses 
-                    SET others = ?, status = ?, updated_at = ?
-                    WHERE id = ?
-                """, (others, status, datetime.now().isoformat(), existing[0]))
-            else:
-                cur.execute("""
-                    INSERT INTO responses (game_id, name, others, status)
-                    VALUES (?, ?, ?, ?)
-                """, (game_id, name, others, status))
+        # Check if response exists
+        cur.execute("SELECT id FROM responses WHERE name = %s AND game_id = %s", (name, game_id))
+        existing = cur.fetchone()
+        
+        if existing:
+            # Update existing response
+            cur.execute("""
+                UPDATE responses 
+                SET others = %s, status = %s, updated_at = %s
+                WHERE id = %s
+            """, (others, status, datetime.now(), existing[0]))
+        else:
+            # Insert new response
+            cur.execute("""
+                INSERT INTO responses (game_id, name, others, status)
+                VALUES (%s, %s, %s, %s)
+            """, (game_id, name, others, status))
         
         conn.commit()
         cur.close()
@@ -502,32 +390,20 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
     finally:
         conn.close()
 
-def load_responses(game_id: int) -> pd.DataFrame:
-    """Load responses with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
-        return load_responses_session(game_id)
-    
-    conn, db_type = conn_info
+def load_responses(game_id):
+    """Load responses for current game"""
+    conn = init_connection()
+    if not conn:
+        return pd.DataFrame()
     
     try:
-        if db_type == "postgresql":
-            query = """
-                SELECT name, others, status, timestamp, updated_at
-                FROM responses 
-                WHERE game_id = %s 
-                ORDER BY timestamp ASC
-            """
-            df = pd.read_sql_query(query, conn, params=(game_id,))
-        else:  # SQLite
-            query = """
-                SELECT name, others, status, timestamp, updated_at
-                FROM responses 
-                WHERE game_id = ? 
-                ORDER BY timestamp ASC
-            """
-            df = pd.read_sql_query(query, conn, params=(game_id,))
-        
+        query = """
+            SELECT name, others, status, timestamp, updated_at
+            FROM responses 
+            WHERE game_id = %s 
+            ORDER BY timestamp ASC
+        """
+        df = pd.read_sql_query(query, conn, params=(game_id,))
         return df
     except Exception as e:
         logger.error(f"Error loading responses: {e}")
@@ -535,8 +411,51 @@ def load_responses(game_id: int) -> pd.DataFrame:
     finally:
         conn.close()
 
+def update_response_status(game_id, names, new_status):
+    """Update status for selected responses"""
+    conn = init_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            UPDATE responses 
+            SET status = %s, updated_at = %s
+            WHERE game_id = %s AND name = ANY(%s)
+        """, (new_status, datetime.now(), game_id, names))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error updating response status: {e}")
+        return False
+    finally:
+        conn.close()
+
+def delete_responses(game_id, names):
+    """Delete selected responses"""
+    conn = init_connection()
+    if not conn:
+        return False
+    
+    try:
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM responses 
+            WHERE game_id = %s AND name = ANY(%s)
+        """, (game_id, names))
+        conn.commit()
+        cur.close()
+        return True
+    except Exception as e:
+        logger.error(f"Error deleting responses: {e}")
+        return False
+    finally:
+        conn.close()
+
 # --- Utility Functions ---
-def format_time_str(t_str) -> str:
+def format_time_str(t_str):
     """Format time string for display"""
     try:
         if isinstance(t_str, str):
@@ -556,36 +475,49 @@ def format_time_str(t_str) -> str:
         return f"{hr} {ampm}"
     return f"{hr}:{m:02d} {ampm}"
 
-def update_statuses(game_id: int):
+def update_statuses(game_id):
     """Update response statuses based on capacity"""
-    df = load_responses(game_id)
+    df = load_responses(game_id).sort_values('timestamp')
     if df.empty:
         return
     
-    df = df.sort_values('timestamp')
-    cum = 0
+    conn = init_connection()
+    if not conn:
+        return
     
-    for idx, row in df.iterrows():
-        if row['status'] in ['❌ Cancelled', '✅ Confirmed', '⏳ Waitlist']:
-            continue
+    try:
+        cur = conn.cursor()
+        cum = 0
         
-        others_str = str(row.get('others', '') or '')
-        extras = len([o.strip() for o in others_str.split(',') if o.strip()])
-        parts = 1 + extras
+        for _, row in df.iterrows():
+            current_status = row['status']
+            if current_status in ['❌ Cancelled', '✅ Confirmed', '⏳ Waitlist']:
+                continue  # Keep manual status
+            
+            others_str = str(row.get('others', '') or '')
+            extras = len([o.strip() for o in others_str.split(',') if o.strip()])
+            parts = 1 + extras
+            
+            if cum + parts <= CAPACITY:
+                new_status = '✅ Confirmed'
+                cum += parts
+            else:
+                new_status = '⏳ Waitlist'
+            
+            cur.execute("""
+                UPDATE responses 
+                SET status = %s, updated_at = %s
+                WHERE game_id = %s AND name = %s
+            """, (new_status, datetime.now(), game_id, row['name']))
         
-        if cum + parts <= CAPACITY:
-            new_status = '✅ Confirmed'
-            cum += parts
-        else:
-            new_status = '⏳ Waitlist'
-        
-        # Update status in session state
-        for resp in st.session_state.responses:
-            if resp['name'] == row['name'] and resp['game_id'] == game_id:
-                resp['status'] = new_status
-                break
+        conn.commit()
+        cur.close()
+    except Exception as e:
+        logger.error(f"Error updating statuses: {e}")
+    finally:
+        conn.close()
 
-def generate_teams(game_id: int, num_teams: Optional[int] = None) -> Optional[List[List[str]]]:
+def generate_teams(game_id, num_teams=None):
     """Generate teams from confirmed players"""
     update_statuses(game_id)
     df = load_responses(game_id)
@@ -614,7 +546,7 @@ def generate_teams(game_id: int, num_teams: Optional[int] = None) -> Optional[Li
     
     return teams
 
-def show_metrics_and_chart(df: pd.DataFrame):
+def show_metrics_and_chart(df):
     """Display metrics and chart for responses"""
     conf = len(df[df['status'] == '✅ Confirmed'])
     wait = len(df[df['status'] == '⏳ Waitlist'])
@@ -627,63 +559,74 @@ def show_metrics_and_chart(df: pd.DataFrame):
     
     st.progress(min(conf / CAPACITY, 1.0), text=f"{conf}/{CAPACITY} confirmed")
     
-    if conf + wait + canc > 0:  # Only show chart if there's data
-        chart_data = pd.DataFrame({
-            'Status': ['Confirmed', 'Waitlist', 'Cancelled'],
-            'Count': [conf, wait, canc]
-        })
-        
-        color_map = {'Confirmed': '#4CAF50', 'Waitlist': '#FFC107', 'Cancelled': '#F44336'}
-        chart = alt.Chart(chart_data).mark_bar().encode(
-            y=alt.Y('Status:N', sort='-x', title=''),
-            x=alt.X('Count:Q', title='Players'),
-            color=alt.Color('Status:N', 
-                           scale=alt.Scale(domain=list(color_map.keys()), 
-                                         range=list(color_map.values()))),
-            tooltip=['Status:N', 'Count:Q']
-        ).properties(width=500, height=200)
-        
-        st.altair_chart(chart, use_container_width=True)
+    chart_data = pd.DataFrame({
+        'Status': ['Confirmed', 'Waitlist', 'Cancelled'],
+        'Count': [conf, wait, canc]
+    })
+    
+    color_map = {'Confirmed': '#4CAF50', 'Waitlist': '#FFC107', 'Cancelled': '#F44336'}
+    chart = alt.Chart(chart_data).mark_bar().encode(
+        y=alt.Y('Status:N', sort='-x', title=''),
+        x=alt.X('Count:Q', title='Players'),
+        color=alt.Color('Status:N', 
+                       scale=alt.Scale(domain=list(color_map.keys()), 
+                                     range=list(color_map.values()))),
+        tooltip=['Status:N', 'Count:Q']
+    ).properties(width=500, height=200)
+    
+    st.altair_chart(chart, use_container_width=True)
 
-def show_system_status():
-    """Display system status"""
-    with st.sidebar.expander("🔧 System Status"):
-        st.markdown("**Database:**")
-        conn_info = init_connection()
-        if conn_info[0] and conn_info[1] == "postgresql":
-            st.success("✅ PostgreSQL Connected")
-        elif conn_info[0] and conn_info[1] == "sqlite":
-            st.warning("⚠️ SQLite Mode")
-        else:
-            st.info("📝 Session Storage Mode")
-        
-        st.markdown("**Security:**")
-        if BCRYPT_AVAILABLE:
-            st.success("✅ Secure Hashing")
-        else:
-            st.warning("⚠️ Basic Hashing")
-        
-        st.markdown("**Backup:**")
-        if GOOGLE_DRIVE_AVAILABLE:
-            st.success("✅ Google Drive Ready")
-        else:
-            st.warning("⚠️ No Backup")
+def show_admin_tab(df, game_id, status_filter):
+    """Show admin management tab for specific status"""
+    filtered = df[df['status'] == status_filter][['name', 'others']].reset_index(drop=True)
+    st.table(filtered)
+    
+    selected = st.multiselect(f"Select from {status_filter}", 
+                             filtered['name'].tolist(), 
+                             key=status_filter)
+    
+    col1, col2, col3, col4 = st.columns(4)
+    
+    if col1.button(f"Move ➡️ Confirmed ({status_filter})", key=f"{status_filter}_c"):
+        if update_response_status(game_id, selected, '✅ Confirmed'):
+            log_admin_action("admin", f"Moved to Confirmed", f"Players: {', '.join(selected)}")
+            st.toast("Moved to Confirmed.")
+            st.rerun()
+    
+    if col2.button(f"Move ➡️ Waitlist ({status_filter})", key=f"{status_filter}_w"):
+        if update_response_status(game_id, selected, '⏳ Waitlist'):
+            log_admin_action("admin", f"Moved to Waitlist", f"Players: {', '.join(selected)}")
+            st.toast("Moved to Waitlist.")
+            st.rerun()
+    
+    if col3.button(f"Move ➡️ Cancelled ({status_filter})", key=f"{status_filter}_x"):
+        if update_response_status(game_id, selected, '❌ Cancelled'):
+            log_admin_action("admin", f"Moved to Cancelled", f"Players: {', '.join(selected)}")
+            st.toast("Moved to Cancelled.")
+            st.rerun()
+    
+    if col4.button(f"🗑️ Remove ({status_filter})", key=f"{status_filter}_rm"):
+        if delete_responses(game_id, selected):
+            log_admin_action("admin", f"Removed players", f"Players: {', '.join(selected)}")
+            st.toast(f"Removed from {status_filter}.")
+            st.rerun()
 
-# --- Initialize System ---
-try:
+# --- Initialize Database ---
+if 'db_initialized' not in st.session_state:
     if create_tables():
-        logger.info("System initialized successfully")
+        st.session_state.db_initialized = True
+        # Create default admin user if it doesn't exist
+        create_admin_user("admin", st.secrets.get("admin_password", "admin123"))
     else:
-        st.warning("Using fallback storage mode")
-except Exception as e:
-    logger.error(f"Initialization error: {e}")
-    st.warning("Using session storage mode due to initialization issues")
+        st.error("Failed to initialize database. Please check your configuration.")
+        st.stop()
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
-section = st.sidebar.selectbox("Navigate to", ["🏀 RSVP", "⚙️ Admin"])
+section = st.sidebar.selectbox("Navigate to", ["🏀 RSVP", "⚙️ Admin", "📊 Analytics"])
 
-show_system_status()
+# Check session timeout
+check_session_timeout()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -698,11 +641,27 @@ if section == '⚙️ Admin':
             if authenticate_admin(username, password):
                 st.session_state.admin_authenticated = True
                 st.session_state.admin_login_time = datetime.now()
-                st.success("Logged in successfully!")
+                log_admin_action(username, "Admin login")
                 st.rerun()
             else:
                 st.sidebar.error("Invalid credentials")
     else:
+        # Backup controls
+        st.subheader("🔄 Data Management")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if st.button("📤 Backup to Google Drive"):
+                backup = GoogleDriveBackup()
+                if backup.backup_database():
+                    st.success("Backup completed successfully!")
+                    log_admin_action("admin", "Database backup created")
+                else:
+                    st.error("Backup failed. Check logs for details.")
+        
+        with col2:
+            st.info("💡 Automatic daily backups are recommended")
+        
         # Game scheduling
         st.subheader(":calendar: Schedule Game")
         with st.form("schedule_form", clear_on_submit=True):
@@ -717,11 +676,12 @@ if section == '⚙️ Admin':
             if st.form_submit_button("Save Schedule"):
                 if save_game(game_date, start_time, end_time, location):
                     st.success("Schedule saved!")
-                    st.rerun()
+                    log_admin_action("admin", "Game scheduled", 
+                                   f"Date: {game_date}, Time: {start_time}-{end_time}, Location: {location}")
                 else:
                     st.error("Failed to save schedule")
 
-        # Show current game
+        # Show current game and responses
         current_game = load_current_game()
         if current_game:
             st.markdown(f"**Current Game:** {current_game['game_date']} — "
@@ -731,6 +691,12 @@ if section == '⚙️ Admin':
             df = load_responses(current_game['id'])
             st.subheader(":clipboard: RSVP Overview")
             show_metrics_and_chart(df)
+            
+            with st.expander("📝 Manage Players"):
+                tabs = st.tabs(["✅ Confirmed", "⏳ Waitlist", "❌ Cancelled"])
+                for i, status in enumerate(['✅ Confirmed', '⏳ Waitlist', '❌ Cancelled']):
+                    with tabs[i]:
+                        show_admin_tab(df, current_game['id'], status)
             
             # Team generation
             confirmed_df = df[df['status'] == '✅ Confirmed']
@@ -746,16 +712,31 @@ if section == '⚙️ Admin':
                 if st.button("Generate Teams"):
                     teams = generate_teams(current_game['id'], num_teams_input)
                     if teams:
-                        st.markdown("### 🏆 Generated Teams:")
                         for i, team in enumerate(teams, 1):
                             st.markdown(f"**Team {i}:** {', '.join(team)}")
+                        st.toast("Teams ready!")
                         st.balloons()
+                        log_admin_action("admin", "Teams generated", 
+                                       f"Generated {len(teams)} teams")
                     else:
                         st.warning("Not enough players.")
-        
-        if st.button("🚪 Logout"):
-            st.session_state.admin_authenticated = False
-            st.rerun()
+            else:
+                st.warning("Not enough confirmed players to generate teams.")
+
+# --- ANALYTICS PAGE ---
+elif section == "📊 Analytics":
+    st.title(":bar_chart: Analytics Dashboard")
+    
+    if not st.session_state.admin_authenticated:
+        st.warning("Please log in as admin to view analytics.")
+    else:
+        # TODO: Add analytics features
+        st.info("Analytics features coming soon!")
+        st.markdown("### Planned Features:")
+        st.markdown("- Player attendance statistics")
+        st.markdown("- Popular time slots analysis")
+        st.markdown("- Capacity utilization trends")
+        st.markdown("- Player reliability scores")
 
 # --- RSVP PAGE ---
 else:
@@ -763,51 +744,41 @@ else:
     
     current_game = load_current_game()
     if not current_game:
-        st.warning("📅 No game scheduled yet.")
-        st.info("The organizer will schedule the next game soon. Check back later!")
+        st.warning("No game scheduled.")
     else:
         game_date = current_game['game_date']
         if isinstance(game_date, str):
-            try:
-                game_date = datetime.fromisoformat(game_date).date()
-            except:
-                game_date = datetime.strptime(game_date, '%Y-%m-%d').date()
+            game_date = datetime.fromisoformat(game_date).date()
         
         deadline = game_date - timedelta(days=CUTOFF_DAYS)
         today = date.today()
         
-        st.markdown(f"### 🏀 Next Game: **{game_date}**")
-        st.markdown(f"**Time:** {format_time_str(current_game['start_time'])} to {format_time_str(current_game['end_time'])}")
-        st.markdown(f"**Location:** {current_game['location']}")
+        st.markdown(f"### Next Game: **{game_date}** from "
+                   f"**{format_time_str(current_game['start_time'])}** to "
+                   f"**{format_time_str(current_game['end_time'])}** @ "
+                   f"**{current_game['location']}**")
         
         df = load_responses(current_game['id'])
         show_metrics_and_chart(df)
         
-        # RSVP Form
-        if today <= deadline:
-            st.info(f"🕒 RSVP is open until **{deadline}**")
+        if today < deadline:
+            st.info(f"RSVP open until **{deadline}** 🕒")
             
             with st.form("rsvp_form"):
-                st.markdown("### 📝 Your RSVP")
-                name = st.text_input("Your First Name", placeholder="Enter your name")
+                name = st.text_input("Your First Name")
                 attend = st.select_slider("Will you attend?", ["No ❌", "Yes ✅"], value="Yes ✅")
-                others = st.text_input("Additional Players (comma-separated)", 
-                                     placeholder="e.g., John, Sarah, Mike")
+                others = st.text_input("Additional Players (comma-separated)")
                 
-                if st.form_submit_button("🎫 Submit RSVP"):
+                if st.form_submit_button("Submit RSVP 🎫"):
                     if not name.strip():
-                        st.error("❌ Please enter your name.")
+                        st.error("Name is required.")
                     else:
                         if add_response(name.strip(), others.strip(), 
                                       attend == "Yes ✅", current_game['id']):
                             update_statuses(current_game['id'])
-                            st.success("✅ RSVP recorded successfully!")
+                            st.success("RSVP recorded!")
                             st.rerun()
                         else:
-                            st.error("❌ Failed to record RSVP. Please try again.")
+                            st.error("Failed to record RSVP. Please try again.")
         else:
-            st.error(f"⏰ RSVP closed on {deadline}")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("🏀 **Basketball Organizer**")
-st.sidebar.markdown("Built with Streamlit")
+            st.error(f"RSVP closed on {deadline}. See you next time!")
