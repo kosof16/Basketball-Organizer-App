@@ -275,38 +275,48 @@ def create_admin_user(username, password):
 
 # Replace your authenticate_admin function with this:
 
+# Debug version - replace your authenticate_admin function with this:
+
 def authenticate_admin(username, password):
-    """Simple authentication using secrets directly"""
-    try:
-        # Get password from secrets with multiple fallback methods
-        stored_password = None
+    """Debug authentication to see what's happening"""
+    
+    # Add debug section to sidebar
+    with st.sidebar.expander("🔍 Debug Info"):
+        st.write("**Available secrets:**")
+        st.write(list(st.secrets.keys()))
         
-        # Try different ways to access the secret
         if "admin_password" in st.secrets:
-            stored_password = st.secrets["admin_password"]
-        elif hasattr(st.secrets, 'admin_password'):
-            stored_password = st.secrets.admin_password
+            secret_pwd = st.secrets["admin_password"]
+            st.write(f"**Secret found:** Yes")
+            st.write(f"**Secret length:** {len(str(secret_pwd))}")
+            st.write(f"**Secret type:** {type(secret_pwd)}")
+            st.write(f"**Secret value:** '{secret_pwd}'")
+            
+            if password:
+                st.write(f"**Input length:** {len(password)}")
+                st.write(f"**Input value:** '{password}'")
+                st.write(f"**Direct match:** {password == secret_pwd}")
+                st.write(f"**String match:** {str(password) == str(secret_pwd)}")
+                st.write(f"**Stripped match:** {str(password).strip() == str(secret_pwd).strip()}")
         else:
-            st.sidebar.error("admin_password not found in secrets!")
-            st.sidebar.write(f"Available secrets: {list(st.secrets.keys())}")
+            st.write("**Secret found:** No")
+    
+    try:
+        # Simple authentication
+        if "admin_password" not in st.secrets:
             return False
+            
+        stored_password = str(st.secrets["admin_password"]).strip()
+        input_password = str(password).strip()
+        input_username = str(username).strip().lower()
         
-        # Clean both strings
-        clean_stored = str(stored_password).strip().strip('"').strip("'")
-        clean_input_password = str(password).strip()
-        clean_input_username = str(username).strip().lower()
+        username_ok = input_username == "admin"
+        password_ok = input_password == stored_password
         
-        # Debug info (remove this after testing)
-        if clean_input_username == "admin":
-            st.sidebar.write(f"🔍 Expected password: '{clean_stored}'")
-            st.sidebar.write(f"🔍 Your input: '{clean_input_password}'")
-            st.sidebar.write(f"🔍 Match: {clean_input_password == clean_stored}")
-        
-        # Simple comparison
-        return clean_input_username == "admin" and clean_input_password == clean_stored
+        return username_ok and password_ok
         
     except Exception as e:
-        st.sidebar.error(f"Authentication error: {e}")
+        st.sidebar.error(f"Auth error: {e}")
         return False
         
 def check_session_timeout():
