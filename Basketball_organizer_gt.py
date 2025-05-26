@@ -314,7 +314,7 @@ def verify_password(password: str, hashed: str) -> bool:
 def authenticate_admin(username: str, password: str) -> bool:
     """Authenticate admin user - simplified for demo"""
     # Simple authentication for now
-    admin_password = st.secrets.get("admin_password", "admin123")
+    admin_password = st.secrets.get["ADMIN_PASSWORD"]
     return username == "admin" and password == admin_password
 
 # --- Main Database Functions with Fallbacks ---
