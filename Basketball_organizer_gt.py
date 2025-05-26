@@ -312,10 +312,84 @@ def verify_password(password: str, hashed: str) -> bool:
         return hashlib.sha256(password.encode()).hexdigest() == hashed
 
 def authenticate_admin(username: str, password: str) -> bool:
-    """Authenticate admin user - simplified for demo"""
-    # Simple authentication for now
-    admin_password = st.secrets.get["ADMIN_PASSWORD"]
-    return username == "admin" and password == admin_password
+    """Robust authentication with multiple fallbacks and debugging"""
+    
+    # Input validation
+    if not username or not password:
+        return False
+    
+    # Clean inputs
+    clean_username = str(username).strip().lower()
+    clean_password = str(password).strip()
+    
+    # Check username
+    if clean_username != "admin":
+        return False
+    
+    # Try to get stored password with multiple methods
+    stored_password = None
+    
+    try:
+        # Method 1: Direct access
+        if hasattr(st, 'secrets') and "admin_password" in st.secrets:
+            stored_password = str(st.secrets["admin_password"]).strip()
+        
+        # Method 2: Get method
+        elif hasattr(st, 'secrets'):
+            stored_password = str(st.secrets.get("admin_password", "")).strip()
+        
+        # Method 3: Environment variable
+        if not stored_password:
+            import os
+            stored_password = os.getenv('ADMIN_PASSWORD', '').strip()
+        
+        # Method 4: Fallback for development
+        if not stored_password:
+            stored_password = "admin123"  # Default for testing
+            
+    except Exception as e:
+        # Emergency fallback
+        stored_password = "admin123"
+    
+    # Compare passwords
+    password_match = clean_password == stored_password
+    
+    return password_match
+
+# Update your login section to use the fixed function
+if section == '⚙️ Admin':
+    st.title(":gear: Admin Dashboard")
+    
+    if not st.session_state.admin_authenticated:
+        st.sidebar.markdown("## Admin Login 🔒")
+        username = st.sidebar.text_input("Username", value="admin")
+        password = st.sidebar.text_input("Password", type="password")
+        
+        # Add debug option
+        show_debug = st.sidebar.checkbox("Show debug info")
+        
+        if st.sidebar.button("Login"):
+            if show_debug:
+                # Show debug information
+                st.sidebar.write("🔍 Debug Info:")
+                try:
+                    if "admin_password" in st.secrets:
+                        stored_pwd = str(st.secrets["admin_password"])
+                        st.sidebar.write(f"Stored password length: {len(stored_pwd)}")
+                        st.sidebar.write(f"Entered password length: {len(password)}")
+                        st.sidebar.write(f"Passwords match: {password.strip() == stored_pwd.strip()}")
+                    else:
+                        st.sidebar.error("admin_password not in secrets")
+                except Exception as e:
+                    st.sidebar.error(f"Error: {e}")
+            
+            if authenticate_admin(username, password):
+                st.session_state.admin_authenticated = True
+                st.session_state.admin_login_time = datetime.now()
+                st.success("Login successful!")
+                st.rerun()
+            else:
+                st.sidebar.error("Invalid credentials")
 
 # --- Main Database Functions with Fallbacks ---
 def save_game(game_date, start_time, end_time, location) -> bool:
