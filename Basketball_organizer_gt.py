@@ -72,7 +72,7 @@ def authenticate_admin(username: str, password: str) -> bool:
         
         # Try multiple ways to access the secret
         if "admin_password" in st.secrets:
-            admin_password = st.secrets["admin_password"]
+            admin_password = st.secrets["ADMIN_PASSWORD"]
         elif hasattr(st.secrets, 'admin_password'):
             admin_password = st.secrets.admin_password
         else:
