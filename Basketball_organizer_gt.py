@@ -105,9 +105,9 @@ def log_admin_action(admin_user: str, action: str, details: str = ""):
     logger.info(f"Admin Action - User: {admin_user}, Action: {action}, Details: {details}")
 
 # --- Database Configuration ---
-@st.cache_resource
+# CRITICAL FIX: Remove @st.cache_resource - this was causing the connection pooling issue
 def get_connection():
-    """Get a new database connection"""
+    """Get a new database connection - DO NOT CACHE THIS"""
     if DB_AVAILABLE and "database" in st.secrets:
         try:
             conn = psycopg2.connect(
@@ -124,7 +124,8 @@ def get_connection():
     
     if SQLITE_AVAILABLE:
         try:
-            conn = sqlite3.connect(':memory:', check_same_thread=False)
+            # Use a file-based SQLite database instead of in-memory for persistence
+            conn = sqlite3.connect('basketball.db', check_same_thread=False)
             return conn, "sqlite"
         except Exception as e:
             logger.error(f"SQLite connection failed: {e}")
@@ -301,12 +302,16 @@ def save_game(game_date, start_time, end_time, location) -> bool:
         
         conn.commit()
         cur.close()
+        logger.info(f"Game saved successfully: {game_date} at {location}")
         return True
     except Exception as e:
         logger.error(f"Error saving game: {e}")
+        if conn:
+            conn.rollback()
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def load_current_game() -> Optional[Dict]:
     """Load current game with fallback"""
@@ -330,7 +335,8 @@ def load_current_game() -> Optional[Dict]:
         logger.error(f"Error loading game: {e}")
         return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
     """Add response with fallback"""
@@ -378,9 +384,12 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error adding response: {e}")
+        if conn:
+            conn.rollback()
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def load_responses(game_id: int) -> pd.DataFrame:
     """Load responses with fallback"""
@@ -411,7 +420,8 @@ def load_responses(game_id: int) -> pd.DataFrame:
         logger.error(f"Error loading responses: {e}")
         return pd.DataFrame()
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def update_response_status(game_id: int, names: List[str], new_status: str) -> bool:
     """Update response status with fallback"""
@@ -441,9 +451,12 @@ def update_response_status(game_id: int, names: List[str], new_status: str) -> b
         return True
     except Exception as e:
         logger.error(f"Error updating response status: {e}")
+        if conn:
+            conn.rollback()
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def delete_responses(game_id: int, names: List[str]) -> bool:
     """Delete responses with fallback"""
@@ -471,9 +484,12 @@ def delete_responses(game_id: int, names: List[str]) -> bool:
         return True
     except Exception as e:
         logger.error(f"Error deleting responses: {e}")
+        if conn:
+            conn.rollback()
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # --- Google Drive Integration ---
 class GoogleDriveBackup:
@@ -754,12 +770,6 @@ if section == '⚙️ Admin':
             st.sidebar.markdown("### Debug Info")
             if "admin_password" in st.secrets:
                 expected_pwd = st.secrets["admin_password"]
-                st.sidebar.write(f"Expected: '{expected_pwd}'")
-                if password:
-                    st.sidebar.write(f"Input: '{password}'")
-                    st.sidebar.write(f"Match: {password == expected_pwd}")
-            else:
-                st.sidebar.error("admin_password not in secrets!")
                 st.sidebar.write(f"Available: {list(st.secrets.keys())}")
         
         if st.sidebar.button("Login"):
@@ -1130,7 +1140,7 @@ else:
 # --- Footer ---
 st.sidebar.markdown("---")
 st.sidebar.markdown("🏀 **Basketball Organizer**")
-st.sidebar.markdown("Built with Streamlit")
+#st.sidebar.markdown("Built with Streamlit")
 
 # Show database status
 conn, db_type = get_connection()
@@ -1148,4 +1158,10 @@ if GOOGLE_DRIVE_AVAILABLE and "google_drive" in st.secrets:
 
 # Show admin hint
 if not st.session_state.admin_authenticated:
-    st.sidebar.markdown("💡 *Admin features available in Admin section*")
+    st.sidebar.markdown("💡 *Admin features available in Admin section*")Expected: '{expected_pwd}'")
+                if password:
+                    st.sidebar.write(f"Input: '{password}'")
+                    st.sidebar.write(f"Match: {password == expected_pwd}")
+            else:
+                st.sidebar.error("admin_password not in secrets!")
+                st.sidebar.write(f"
