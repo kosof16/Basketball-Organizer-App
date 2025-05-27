@@ -721,7 +721,7 @@ def show_admin_tab(df: pd.DataFrame, game_id: int, status_filter: str):
         st.info(f"No players in {status_filter} status")
 
 def show_system_status():
-    """Display system status"""
+    """Display system status - ONLY FOR ADMIN SECTION"""
     with st.sidebar.expander("🔧 System Status"):
         conn, db_type = get_connection()
         if conn and db_type == "postgresql":
@@ -750,8 +750,10 @@ except Exception as e:
 st.sidebar.markdown("# 📜 Menu")
 section = st.sidebar.selectbox("Navigate to", ["🏀 RSVP", "⚙️ Admin", "📊 Analytics"])
 
-show_system_status()
-check_session_timeout()
+# Only show system status and check timeout in Admin section
+if section == '⚙️ Admin':
+    show_system_status()
+    check_session_timeout()
 
 # --- ADMIN PAGE ---
 if section == '⚙️ Admin':
@@ -885,6 +887,24 @@ if section == '⚙️ Admin':
             st.session_state.admin_login_time = None
             log_admin_action("admin", "Admin logout")
             st.rerun()
+    
+    # Show database status and admin hint ONLY in admin section
+    st.sidebar.markdown("---")
+    conn, db_type = get_connection()
+    if conn and db_type == "postgresql":
+        st.sidebar.markdown("🗄️ PostgreSQL Database")
+        conn.close()
+    elif conn and db_type == "sqlite":
+        st.sidebar.markdown("🗄️ SQLite Database")
+        conn.close()
+    else:
+        st.sidebar.markdown("📝 Session Storage")
+    
+    if GOOGLE_DRIVE_AVAILABLE and "google_drive" in st.secrets:
+        st.sidebar.markdown("☁️ Google Drive Backup")
+    
+    if not st.session_state.admin_authenticated:
+        st.sidebar.markdown("💡 *Please log in to access admin features*")
 
 # --- ANALYTICS PAGE ---
 elif section == "📊 Analytics":
@@ -1140,22 +1160,3 @@ else:
 # --- Footer ---
 st.sidebar.markdown("---")
 st.sidebar.markdown("🏀 **Basketball Organizer**")
-#st.sidebar.markdown("Built with Streamlit")
-
-# Show database status
-conn, db_type = get_connection()
-if conn and db_type == "postgresql":
-    st.sidebar.markdown("🗄️ PostgreSQL Database")
-    conn.close()
-elif conn and db_type == "sqlite":
-    st.sidebar.markdown("🗄️ SQLite Database")
-    conn.close()
-else:
-    st.sidebar.markdown("📝 Session Storage")
-
-if GOOGLE_DRIVE_AVAILABLE and "google_drive" in st.secrets:
-    st.sidebar.markdown("☁️ Google Drive Backup")
-
-# Show admin hint
-if not st.session_state.admin_authenticated:
-    st.sidebar.markdown("💡 *Admin features available in Admin section*")
