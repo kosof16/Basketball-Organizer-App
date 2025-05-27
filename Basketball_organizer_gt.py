@@ -1158,10 +1158,4 @@ if GOOGLE_DRIVE_AVAILABLE and "google_drive" in st.secrets:
 
 # Show admin hint
 if not st.session_state.admin_authenticated:
-    st.sidebar.markdown("💡 *Admin features available in Admin section*")Expected: '{expected_pwd}'")
-                if password:
-                    st.sidebar.write(f"Input: '{password}'")
-                    st.sidebar.write(f"Match: {password == expected_pwd}")
-            else:
-                st.sidebar.error("admin_password not in secrets!")
-                st.sidebar.write(f"
+    st.sidebar.markdown("💡 *Admin features available in Admin section*")
