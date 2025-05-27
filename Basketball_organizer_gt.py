@@ -67,15 +67,10 @@ if "responses" not in st.session_state:
 def authenticate_admin(username: str, password: str) -> bool:
     """Simple authentication using secrets.toml directly"""
     try:
-        # Get admin password from secrets
-        admin_password = None
+        # Get admin password from secrets - FIX: correct way to access
+        admin_password = st.secrets.get("admin_password", None)
         
-        # Try multiple ways to access the secret
-        if "admin_password" in st.secrets:
-            admin_password = st.secrets["ADMIN_PASSWORD"]
-        elif hasattr(st.secrets, 'admin_password'):
-            admin_password = st.secrets.admin_password
-        else:
+        if admin_password is None:
             st.sidebar.error("❌ admin_password not found in secrets!")
             st.sidebar.write(f"Available secrets: {list(st.secrets.keys())}")
             return False
@@ -111,8 +106,8 @@ def log_admin_action(admin_user: str, action: str, details: str = ""):
 
 # --- Database Configuration ---
 @st.cache_resource
-def init_connection():
-    """Initialize database connection with fallbacks"""
+def get_connection():
+    """Get a new database connection"""
     if DB_AVAILABLE and "database" in st.secrets:
         try:
             conn = psycopg2.connect(
@@ -123,7 +118,6 @@ def init_connection():
                 port=st.secrets["database"]["port"],
                 connect_timeout=10
             )
-            logger.info("PostgreSQL connection established")
             return conn, "postgresql"
         except Exception as e:
             logger.error(f"PostgreSQL connection failed: {e}")
@@ -131,22 +125,22 @@ def init_connection():
     if SQLITE_AVAILABLE:
         try:
             conn = sqlite3.connect(':memory:', check_same_thread=False)
-            logger.info("SQLite in-memory connection established")
             return conn, "sqlite"
         except Exception as e:
             logger.error(f"SQLite connection failed: {e}")
     
-    logger.warning("No database available, using session state storage")
     return None, "session"
 
+def init_connection():
+    """Initialize connection info (for compatibility)"""
+    return get_connection()
+
 def create_tables():
-    """Create necessary database tables with fallback support"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    """Create necessary database tables with proper connection handling"""
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         logger.info("Using session state for data storage")
         return True
-    
-    conn, db_type = conn_info
     
     try:
         cur = conn.cursor()
@@ -286,11 +280,9 @@ def delete_responses_session(game_id, names):
 # --- Main Database Functions with Fallbacks ---
 def save_game(game_date, start_time, end_time, location) -> bool:
     """Save game with fallback to session state"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return save_game_session(game_date, start_time, end_time, location)
-    
-    conn, db_type = conn_info
     
     try:
         cur = conn.cursor()
@@ -318,11 +310,9 @@ def save_game(game_date, start_time, end_time, location) -> bool:
 
 def load_current_game() -> Optional[Dict]:
     """Load current game with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return load_current_game_session()
-    
-    conn, db_type = conn_info
     
     try:
         if db_type == "postgresql":
@@ -344,11 +334,9 @@ def load_current_game() -> Optional[Dict]:
 
 def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
     """Add response with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return add_response_session(name, others, attend, game_id)
-    
-    conn, db_type = conn_info
     
     try:
         cur = conn.cursor()
@@ -396,11 +384,9 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
 
 def load_responses(game_id: int) -> pd.DataFrame:
     """Load responses with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return load_responses_session(game_id)
-    
-    conn, db_type = conn_info
     
     try:
         if db_type == "postgresql":
@@ -429,11 +415,9 @@ def load_responses(game_id: int) -> pd.DataFrame:
 
 def update_response_status(game_id: int, names: List[str], new_status: str) -> bool:
     """Update response status with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return update_response_status_session(game_id, names, new_status)
-    
-    conn, db_type = conn_info
     
     try:
         cur = conn.cursor()
@@ -463,11 +447,9 @@ def update_response_status(game_id: int, names: List[str], new_status: str) -> b
 
 def delete_responses(game_id: int, names: List[str]) -> bool:
     """Delete responses with fallback"""
-    conn_info = init_connection()
-    if not conn_info[0] or conn_info[1] == "session":
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
         return delete_responses_session(game_id, names)
-    
-    conn, db_type = conn_info
     
     try:
         cur = conn.cursor()
@@ -725,11 +707,13 @@ def show_admin_tab(df: pd.DataFrame, game_id: int, status_filter: str):
 def show_system_status():
     """Display system status"""
     with st.sidebar.expander("🔧 System Status"):
-        conn_info = init_connection()
-        if conn_info[0] and conn_info[1] == "postgresql":
+        conn, db_type = get_connection()
+        if conn and db_type == "postgresql":
             st.success("✅ PostgreSQL Connected")
-        elif conn_info[0] and conn_info[1] == "sqlite":
+            conn.close()
+        elif conn and db_type == "sqlite":
             st.warning("⚠️ SQLite Mode")
+            conn.close()
         else:
             st.info("📝 Session Storage Mode")
         
@@ -1149,11 +1133,13 @@ st.sidebar.markdown("🏀 **Basketball Organizer**")
 st.sidebar.markdown("Built with Streamlit")
 
 # Show database status
-conn_info = init_connection()
-if conn_info[0] and conn_info[1] == "postgresql":
+conn, db_type = get_connection()
+if conn and db_type == "postgresql":
     st.sidebar.markdown("🗄️ PostgreSQL Database")
-elif conn_info[0] and conn_info[1] == "sqlite":
+    conn.close()
+elif conn and db_type == "sqlite":
     st.sidebar.markdown("🗄️ SQLite Database")
+    conn.close()
 else:
     st.sidebar.markdown("📝 Session Storage")
 
