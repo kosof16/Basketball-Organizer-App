@@ -156,7 +156,8 @@ def create_tables():
                     end_time TIME NOT NULL,
                     location VARCHAR(255) NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
+                    is_active BOOLEAN DEFAULT TRUE,
+                    is_cancelled BOOLEAN DEFAULT FALSE
                 )
             """)
             
@@ -181,7 +182,8 @@ def create_tables():
                     end_time TIME NOT NULL,
                     location TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
+                    is_active BOOLEAN DEFAULT TRUE,
+                    is_cancelled BOOLEAN DEFAULT FALSE
                 )
             """)
             
@@ -220,7 +222,8 @@ def save_game_session(game_date, start_time, end_time, location):
         'end_time': end_time.isoformat() if hasattr(end_time, 'isoformat') else str(end_time),
         'location': location,
         'created_at': datetime.now().isoformat(),
-        'is_active': True
+        'is_active': True,
+        'is_cancelled': False
     }
     st.session_state.current_game = game_data
     return True
@@ -451,6 +454,44 @@ def update_response_status(game_id: int, names: List[str], new_status: str) -> b
         return True
     except Exception as e:
         logger.error(f"Error updating response status: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+def cancel_game(game_id: int) -> bool:
+    """Cancel the current game"""
+    conn, db_type = get_connection()
+    if not conn or db_type == "session":
+        # Cancel in session state
+        if st.session_state.current_game and st.session_state.current_game['id'] == game_id:
+            st.session_state.current_game['is_cancelled'] = True
+            return True
+        return False
+    
+    try:
+        cur = conn.cursor()
+        if db_type == "postgresql":
+            cur.execute("""
+                UPDATE games 
+                SET is_cancelled = TRUE
+                WHERE id = %s
+            """, (game_id,))
+        else:  # SQLite
+            cur.execute("""
+                UPDATE games 
+                SET is_cancelled = 1
+                WHERE id = ?
+            """, (game_id,))
+        
+        conn.commit()
+        cur.close()
+        logger.info(f"Game {game_id} cancelled successfully")
+        return True
+    except Exception as e:
+        logger.error(f"Error cancelling game: {e}")
         if conn:
             conn.rollback()
         return False
@@ -829,9 +870,49 @@ if section == '⚙️ Admin':
         # Show current game and responses
         current_game = load_current_game()
         if current_game:
-            st.markdown(f"**Current Game:** {current_game['game_date']} — "
-                       f"**{format_time_str(current_game['start_time'])} to {format_time_str(current_game['end_time'])}** "
-                       f"@ **{current_game['location']}**")
+            # Check if game is cancelled
+            is_cancelled = current_game.get('is_cancelled', False)
+            
+            if is_cancelled:
+                st.error(f"**❌ CANCELLED: Game on {current_game['game_date']} has been cancelled**")
+            else:
+                st.markdown(f"**Current Game:** {current_game['game_date']} — "
+                           f"**{format_time_str(current_game['start_time'])} to {format_time_str(current_game['end_time'])}** "
+                           f"@ **{current_game['location']}**")
+            
+            # Cancel game button
+            if not is_cancelled:
+                col1, col2, col3 = st.columns([1, 1, 2])
+                with col1:
+                    if st.button("❌ Cancel Game", type="secondary"):
+                        if st.session_state.get('confirm_cancel', False):
+                            # Actually cancel the game
+                            if cancel_game(current_game['id']):
+                                st.success("Game cancelled successfully!")
+                                log_admin_action("admin", "Game cancelled", 
+                                               f"Cancelled game on {current_game['game_date']}")
+                                st.session_state.confirm_cancel = False
+                                st.rerun()
+                            else:
+                                st.error("Failed to cancel game")
+                        else:
+                            st.session_state.confirm_cancel = True
+                            st.rerun()
+                
+                with col2:
+                    if st.session_state.get('confirm_cancel', False):
+                        if st.button("✅ Confirm Cancel", type="primary"):
+                            # Will trigger actual cancellation on next click
+                            pass
+                        
+                with col3:
+                    if st.session_state.get('confirm_cancel', False):
+                        if st.button("↩️ Don't Cancel"):
+                            st.session_state.confirm_cancel = False
+                            st.rerun()
+                
+                if st.session_state.get('confirm_cancel', False):
+                    st.warning("⚠️ Are you sure you want to cancel this game? Click 'Confirm Cancel' to proceed.")
             
             df = load_responses(current_game['id'])
             st.subheader(":clipboard: RSVP Overview")
@@ -1016,146 +1097,154 @@ else:
         deadline = game_date - timedelta(days=CUTOFF_DAYS)
         today = date.today()
         
-        # Game details header
-        st.markdown(f"### 🏀 Next Game: **{game_date}**")
+        # Check if game is cancelled
+        is_cancelled = current_game.get('is_cancelled', False)
         
-        # Create info columns
-        info_col1, info_col2 = st.columns(2)
-        with info_col1:
-            st.markdown(f"**⏰ Time:** {format_time_str(current_game['start_time'])} to {format_time_str(current_game['end_time'])}")
-        with info_col2:
-            st.markdown(f"**📍 Location:** {current_game['location']}")
-        
-        # Game day countdown
-        if today < game_date:
-            days_until = (game_date - today).days
-            if days_until == 0:
-                st.success("🎉 Game day is today!")
-            elif days_until == 1:
-                st.info("🏀 Game is tomorrow!")
-            else:
-                st.info(f"📅 {days_until} days until the game")
-        elif today == game_date:
-            st.success("🎉 Game day is today! See you on the court!")
+        if is_cancelled:
+            st.error("# ❌ Game Cancelled")
+            st.error(f"The game scheduled for **{game_date}** has been cancelled by the organizer.")
+            st.info("Please check back later for the next scheduled game.")
         else:
-            st.info("This game has already taken place.")
-        
-        # Load and display current responses
-        df = load_responses(current_game['id'])
-        show_metrics_and_chart(df)
-        
-        # Show player lists
-        if not df.empty:
-            with st.expander("👥 See who's playing", expanded=True):
-                player_col1, player_col2 = st.columns(2)
-                
-                with player_col1:
-                    confirmed = df[df['status'] == '✅ Confirmed']
-                    if not confirmed.empty:
-                        st.markdown("**✅ Confirmed Players:**")
-                        total_confirmed = 0
-                        for _, row in confirmed.iterrows():
-                            others_str = str(row.get('others', '') or '')
-                            others_list = [o.strip() for o in others_str.split(',') if o.strip()]
-                            player_count = 1 + len(others_list)
-                            total_confirmed += player_count
-                            
-                            if others_list:
-                                st.write(f"• **{row['name']}** + {', '.join(others_list)} ({player_count} total)")
-                            else:
-                                st.write(f"• **{row['name']}**")
-                        
-                        st.markdown(f"*Total confirmed players: {total_confirmed}*")
-                    else:
-                        st.info("No confirmed players yet")
-                
-                with player_col2:
-                    waitlist = df[df['status'] == '⏳ Waitlist']
-                    if not waitlist.empty:
-                        st.markdown("**⏳ Waitlist:**")
-                        for _, row in waitlist.iterrows():
-                            others_str = str(row.get('others', '') or '')
-                            others_list = [o.strip() for o in others_str.split(',') if o.strip()]
-                            if others_list:
-                                st.write(f"• {row['name']} + {', '.join(others_list)}")
-                            else:
-                                st.write(f"• {row['name']}")
-                    else:
-                        st.info("No players on waitlist")
-        
-        # RSVP Form
-        if today <= deadline:
-            st.info(f"🕒 RSVP is open until **{deadline}**")
+            # Game details header
+            st.markdown(f"### 🏀 Next Game: **{game_date}**")
             
-            # Check if user already has an RSVP
-            with st.form("rsvp_form"):
-                st.markdown("### 📝 Your RSVP")
-                name = st.text_input("Your First Name", placeholder="Enter your first name")
-                attend = st.select_slider("Will you attend?", ["No ❌", "Yes ✅"], value="Yes ✅")
-                others = st.text_input("Additional Players (comma-separated)", 
-                                     placeholder="e.g., John, Sarah, Mike")
-                
-                # Show capacity warning and info
-                if attend == "Yes ✅":
-                    confirmed_count = len(df[df['status'] == '✅ Confirmed'])
-                    others_count = len([o.strip() for o in others.split(',') if o.strip()]) if others else 0
-                    total_requesting = 1 + others_count
+            # Create info columns
+            info_col1, info_col2 = st.columns(2)
+            with info_col1:
+                st.markdown(f"**⏰ Time:** {format_time_str(current_game['start_time'])} to {format_time_str(current_game['end_time'])}")
+            with info_col2:
+                st.markdown(f"**📍 Location:** {current_game['location']}")
+            
+            # Game day countdown
+            if today < game_date:
+                days_until = (game_date - today).days
+                if days_until == 0:
+                    st.success("🎉 Game day is today!")
+                elif days_until == 1:
+                    st.info("🏀 Game is tomorrow!")
+                else:
+                    st.info(f"📅 {days_until} days until the game")
+            elif today == game_date:
+                st.success("🎉 Game day is today! See you on the court!")
+            else:
+                st.info("This game has already taken place.")
+            
+            # Load and display current responses
+            df = load_responses(current_game['id'])
+            show_metrics_and_chart(df)
+            
+            # Show player lists
+            if not df.empty:
+                with st.expander("👥 See who's playing", expanded=True):
+                    player_col1, player_col2 = st.columns(2)
                     
-                    if confirmed_count + total_requesting > CAPACITY:
-                        st.warning(f"⚠️ Game is nearly full! You might be placed on the waitlist.")
-                    
-                    if others_count > 0:
-                        st.info(f"ℹ️ You're RSVPing for **{total_requesting} people** total (yourself + {others_count} others)")
-                
-                submit_button = st.form_submit_button("🎫 Submit RSVP", use_container_width=True)
-                
-                if submit_button:
-                    if not name.strip():
-                        st.error("❌ Please enter your name.")
-                    else:
-                        # Check if name already exists
-                        existing = df[df['name'].str.lower() == name.strip().lower()]
-                        
-                        if add_response(name.strip(), others.strip(), 
-                                      attend == "Yes ✅", current_game['id']):
-                            update_statuses(current_game['id'])
+                    with player_col1:
+                        confirmed = df[df['status'] == '✅ Confirmed']
+                        if not confirmed.empty:
+                            st.markdown("**✅ Confirmed Players:**")
+                            total_confirmed = 0
+                            for _, row in confirmed.iterrows():
+                                others_str = str(row.get('others', '') or '')
+                                others_list = [o.strip() for o in others_str.split(',') if o.strip()]
+                                player_count = 1 + len(others_list)
+                                total_confirmed += player_count
+                                
+                                if others_list:
+                                    st.write(f"• **{row['name']}** + {', '.join(others_list)} ({player_count} total)")
+                                else:
+                                    st.write(f"• **{row['name']}**")
                             
-                            if not existing.empty:
-                                st.success("✅ Your RSVP has been updated!")
-                                st.info("Your previous RSVP was replaced with this new one.")
-                            else:
-                                st.success("✅ RSVP recorded successfully!")
-                            
-                            st.info("🔄 Refreshing page to show updated status...")
-                            st.rerun()
+                            st.markdown(f"*Total confirmed players: {total_confirmed}*")
                         else:
-                            st.error("❌ Failed to record RSVP. Please try again.")
-        else:
-            st.error(f"⏰ RSVP closed on {deadline}")
-            st.info("The RSVP deadline has passed. Contact the organizer if you need to make changes.")
-        
-        # Show recent activity
-        if not df.empty:
-            with st.expander("📈 Recent Activity"):
-                recent_df = df.sort_values('timestamp', ascending=False).head(5)
-                st.markdown("**Latest RSVPs:**")
-                for _, row in recent_df.iterrows():
-                    timestamp = pd.to_datetime(row['timestamp'])
-                    time_ago = datetime.now() - timestamp.replace(tzinfo=None)
+                            st.info("No confirmed players yet")
                     
-                    if time_ago.days > 0:
-                        time_str = f"{time_ago.days} day{'s' if time_ago.days > 1 else ''} ago"
-                    elif time_ago.seconds > 3600:
-                        hours = time_ago.seconds // 3600
-                        time_str = f"{hours} hour{'s' if hours > 1 else ''} ago"
-                    elif time_ago.seconds > 60:
-                        minutes = time_ago.seconds // 60
-                        time_str = f"{minutes} minute{'s' if minutes > 1 else ''} ago"
-                    else:
-                        time_str = "Just now"
+                    with player_col2:
+                        waitlist = df[df['status'] == '⏳ Waitlist']
+                        if not waitlist.empty:
+                            st.markdown("**⏳ Waitlist:**")
+                            for _, row in waitlist.iterrows():
+                                others_str = str(row.get('others', '') or '')
+                                others_list = [o.strip() for o in others_str.split(',') if o.strip()]
+                                if others_list:
+                                    st.write(f"• {row['name']} + {', '.join(others_list)}")
+                                else:
+                                    st.write(f"• {row['name']}")
+                        else:
+                            st.info("No players on waitlist")
+            
+            # RSVP Form
+            if today <= deadline:
+                st.info(f"🕒 RSVP is open until **{deadline}**")
+                
+                # Check if user already has an RSVP
+                with st.form("rsvp_form"):
+                    st.markdown("### 📝 Your RSVP")
+                    name = st.text_input("Your First Name", placeholder="Enter your first name")
+                    attend = st.select_slider("Will you attend?", ["No ❌", "Yes ✅"], value="Yes ✅")
+                    others = st.text_input("Additional Players (comma-separated)", 
+                                         placeholder="e.g., John, Sarah, Mike")
                     
-                    status_emoji = row['status'] if row['status'] else "🔄"
-                    st.write(f"• **{row['name']}** {status_emoji} - {time_str}")
+                    # Show capacity warning and info
+                    if attend == "Yes ✅":
+                        confirmed_count = len(df[df['status'] == '✅ Confirmed'])
+                        others_count = len([o.strip() for o in others.split(',') if o.strip()]) if others else 0
+                        total_requesting = 1 + others_count
+                        
+                        if confirmed_count + total_requesting > CAPACITY:
+                            st.warning(f"⚠️ Game is nearly full! You might be placed on the waitlist.")
+                        
+                        if others_count > 0:
+                            st.info(f"ℹ️ You're RSVPing for **{total_requesting} people** total (yourself + {others_count} others)")
+                    
+                    submit_button = st.form_submit_button("🎫 Submit RSVP", use_container_width=True)
+                    
+                    if submit_button:
+                        if not name.strip():
+                            st.error("❌ Please enter your name.")
+                        else:
+                            # Check if name already exists
+                            existing = df[df['name'].str.lower() == name.strip().lower()]
+                            
+                            if add_response(name.strip(), others.strip(), 
+                                          attend == "Yes ✅", current_game['id']):
+                                update_statuses(current_game['id'])
+                                
+                                if not existing.empty:
+                                    st.success("✅ Your RSVP has been updated!")
+                                    st.info("Your previous RSVP was replaced with this new one.")
+                                else:
+                                    st.success("✅ RSVP recorded successfully!")
+                                
+                                st.info("🔄 Refreshing page to show updated status...")
+                                st.rerun()
+                            else:
+                                st.error("❌ Failed to record RSVP. Please try again.")
+            else:
+                st.error(f"⏰ RSVP closed on {deadline}")
+                st.info("The RSVP deadline has passed. Contact the organizer if you need to make changes.")
+            
+            # Show recent activity
+            if not df.empty:
+                with st.expander("📈 Recent Activity"):
+                    recent_df = df.sort_values('timestamp', ascending=False).head(5)
+                    st.markdown("**Latest RSVPs:**")
+                    for _, row in recent_df.iterrows():
+                        timestamp = pd.to_datetime(row['timestamp'])
+                        time_ago = datetime.now() - timestamp.replace(tzinfo=None)
+                        
+                        if time_ago.days > 0:
+                            time_str = f"{time_ago.days} day{'s' if time_ago.days > 1 else ''} ago"
+                        elif time_ago.seconds > 3600:
+                            hours = time_ago.seconds // 3600
+                            time_str = f"{hours} hour{'s' if hours > 1 else ''} ago"
+                        elif time_ago.seconds > 60:
+                            minutes = time_ago.seconds // 60
+                            time_str = f"{minutes} minute{'s' if minutes > 1 else ''} ago"
+                        else:
+                            time_str = "Just now"
+                        
+                        status_emoji = row['status'] if row['status'] else "🔄"
+                        st.write(f"• **{row['name']}** {status_emoji} - {time_str}")
 
 # --- Footer ---
 st.sidebar.markdown("---")
