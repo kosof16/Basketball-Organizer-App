@@ -1541,6 +1541,7 @@ def show_admin_tab(df: pd.DataFrame, game_id: int, status_filter: str):
     else:
         st.info(f"No players in {status_filter} status")
 
+# --- Function Definitions ---
 def show_system_status():
     """Display system status"""
     with st.sidebar.expander("🔧 System Status"):
@@ -1617,8 +1618,7 @@ section = st.sidebar.selectbox("Navigate to", [
     "⚙️ Admin", 
     "📊 Analytics"
 ])
-
-show_system_status()
+show_system_status()  # Call the function after its definition
 check_session_timeout()
 
 # --- CALENDAR PAGE ---
