@@ -1,11 +1,3 @@
-For script below, I am generating this error:
-File "/mount/src/basketball-organizer-app/Basketball_organizer_gt.py", line 169
-      ]
-      ^
-SyntaxError: unmatched ']'
-
-what is the issue and the solution to the issue?
-
 import streamlit as st
 import pandas as pd
 import os
