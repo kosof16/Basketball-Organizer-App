@@ -147,6 +147,23 @@ def create_calendar_event(title: str, event_date: date, start_time: time, end_ti
     except Exception as e:
         logger.error(f"Error creating calendar event: {e}")
         return False
+        
+# --- Function Definitions ---
+def show_system_status():
+    """Display system status"""
+    with st.sidebar.expander("🔧 System Status"):
+        conn_info = init_connection()
+        if conn_info[0] and conn_info[1] == "postgresql":
+            st.success("✅ PostgreSQL Connected")
+        elif conn_info[0] and conn_info[1] == "sqlite":
+            st.warning("⚠️ SQLite Mode")
+        else:
+            st.info("📝 Session Storage Mode")
+        
+        if GOOGLE_DRIVE_AVAILABLE and "google_drive" in st.secrets:
+            st.success("✅ Google Drive Ready")
+        else:
+            st.warning("⚠️ No Backup Configured")
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
