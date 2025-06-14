@@ -176,7 +176,8 @@ def init_connection():
     
     logger.warning("No database available, using session state storage")
     return None, "session"
-        
+
+
 # --- Function Definitions ---
 def show_system_status():
     """Display system status"""
@@ -1079,35 +1080,7 @@ def delete_calendar_event(event_id: int) -> bool:
         logger.error(f"Error deleting calendar event: {e}")
         return False
 
-# --- Database Configuration (existing code) ---
-@st.cache_resource
-def init_connection():
-    """Initialize database connection with fallbacks"""
-    if DB_AVAILABLE and "database" in st.secrets:
-        try:
-            conn = psycopg2.connect(
-                host=st.secrets["database"]["host"],
-                database=st.secrets["database"]["dbname"],
-                user=st.secrets["database"]["user"],
-                password=st.secrets["database"]["password"],
-                port=st.secrets["database"]["port"],
-                connect_timeout=10
-            )
-            logger.info("PostgreSQL connection established")
-            return conn, "postgresql"
-        except Exception as e:
-            logger.error(f"PostgreSQL connection failed: {e}")
-    
-    if SQLITE_AVAILABLE:
-        try:
-            conn = sqlite3.connect(':memory:', check_same_thread=False)
-            logger.info("SQLite in-memory connection established")
-            return conn, "sqlite"
-        except Exception as e:
-            logger.error(f"SQLite connection failed: {e}")
-    
-    logger.warning("No database available, using session state storage")
-    return None, "session"
+
 
 def create_tables():
     """Create necessary database tables with fallback support"""
@@ -1586,5 +1559,3 @@ def show_admin_tab(df: pd.DataFrame, game_id: int, status_filter: str):
                     st.rerun()
     else:
         st.info(f"No players in {status_filter} status")
-
-
