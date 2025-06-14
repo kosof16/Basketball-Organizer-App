@@ -142,7 +142,11 @@ def create_calendar_event(title: str, event_date: date, start_time: time, end_ti
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
-    st.session_state.calendar_events.append(event)
+        st.session_state.calendar_events.append(event)
+        return True
+    except Exception as e:
+        logger.error(f"Error creating calendar event: {e}")
+        return False
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
