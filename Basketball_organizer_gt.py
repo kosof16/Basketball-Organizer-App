@@ -1,3 +1,4 @@
+
 import streamlit as st
 import pandas as pd
 import os
@@ -194,6 +195,16 @@ def show_system_status():
             st.success("✅ Google Drive Ready")
         else:
             st.warning("⚠️ No Backup Configured")
+
+def load_current_game() -> Optional[Dict]:
+    """Load current game with fallback"""
+    conn_info = init_connection()
+    if not conn_info[0] or conn_info[1] == "session":
+        return load_current_game_session()
+    
+    # Database implementation would go here
+    # Ensure to return a valid game object or None
+    return load_current_game_session()
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
