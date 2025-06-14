@@ -130,44 +130,19 @@ def create_calendar_event(title: str, event_date: date, start_time: time, end_ti
     """Create a new calendar event"""
     try:
         event_id = len(st.session_state.calendar_events) + 1
-        event = [ {
+        event = {
             'id': event_id,
             'title': title,
             'date': event_date.isoformat(),
             'start_time': start_time.isoformat(),
             'end_time': end_time.isoformat(),
             'type': event_type,
-            'location': 'Main Court',
-            'description': 'Regular weekly basketball game for all skill levels',
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        },
-        {
-            'id': 2,
-            'title': 'Basketball Training Session',
-            'date': (today + timedelta(days=1)).isoformat(),
-            'start_time': '17:00',
-            'end_time': '18:30',
-            'type': '🏃 Training',
-            'location': 'Training Hall',
-            'description': 'Skills development and fitness training',
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        },
-        {
-            'id': 3,
-            'title': 'Monthly Tournament',
-            'date': (today + timedelta(days=10)).isoformat(),
-            'start_time': '09:00',
-            'end_time': '17:00',
-            'type': '🏆 Tournament',
-            'location': 'Sports Complex',
-            'description': 'Monthly basketball tournament - registration required',
+            'location': location,
+            'description': description,
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
-    ]
-    st.session_state.calendar_events = sample_events
+        st.session_state.calendar_events.append(event)
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
