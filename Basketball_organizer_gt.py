@@ -217,7 +217,7 @@ section = st.sidebar.selectbox("Navigate to", [
 
 show_system_status()
 check_session_timeout()
-
+current_game = load_current_game()
 # --- CALENDAR PAGE ---
 if section == "📅 Calendar":
     st.title("📅 Basketball Events Calendar")
