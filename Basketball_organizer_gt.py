@@ -1577,18 +1577,6 @@ if not st.session_state.calendar_events:
             'start_time': '18:00',
             'end_time': '20:00',
             'type': '🏀 Game',
-            'location':# Initialize some sample events if none exist
-if not st.session_state.calendar_events:
-    # Add some sample events
-    today = date.today()
-    sample_events = [
-        {
-            'id': 1,
-            'title': 'Weekly Basketball Game',
-            'date': (today + timedelta(days=3)).isoformat(),
-            'start_time': '18:00',
-            'end_time': '20:00',
-            'type': '🏀 Game',
             'location': 'Arc: Health and Fitness Centre',
             'description': 'Regular weekly basketball game for all skill levels',
             'created_at': datetime.now().isoformat(),
