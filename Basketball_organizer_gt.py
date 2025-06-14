@@ -142,7 +142,7 @@ def create_calendar_event(title: str, event_date: date, start_time: time, end_ti
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
         }
-        st.session_state.calendar_events.append(event)
+    st.session_state.calendar_events.append(event)
 
 # --- Main Application ---
 st.sidebar.markdown("# 📜 Menu")
