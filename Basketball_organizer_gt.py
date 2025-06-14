@@ -47,7 +47,7 @@ except ImportError as e:
 
 # --- Constants ---
 CAPACITY = int(os.getenv('GAME_CAPACITY', '15'))
-DEFAULT_LOCATION = "Main Court"
+DEFAULT_LOCATION = "Arc: Health and Fitness Centre"
 CUTOFF_DAYS = int(os.getenv('RSVP_CUTOFF_DAYS', '1'))
 SESSION_TIMEOUT_MINUTES = 30
 
@@ -396,7 +396,7 @@ elif section == '⚙️ Admin':
                     with col2:
                         event_type = st.selectbox("Event Type*", list(EVENT_TYPES.keys()))
                         end_time = st.time_input("End Time*", value=time(20, 0))
-                        event_location = st.text_input("Location", placeholder="e.g., Main Court")
+                        event_location = st.text_input("Location", placeholder="e.g., Arc: Health and Fitness Centre")
                     
                     event_description = st.text_area("Description", placeholder="Optional event description...")
                     
@@ -978,16 +978,7 @@ if st.session_state.calendar_events:
                 📍 {next_event['location']}
             </small>
         </div>
-        """, unsafe_allow_html=True) location,
-            'description': description,
-            'created_at': datetime.now().isoformat(),
-            'updated_at': datetime.now().isoformat()
-        }
-        st.session_state.calendar_events.append(event)
-        return True
-    except Exception as e:
-        logger.error(f"Error creating calendar event: {e}")
-        return False
+        """, unsafe_allow_html=True)
 
 def get_events_for_date(target_date: date) -> List[Dict]:
     """Get all events for a specific date"""
@@ -1598,7 +1589,7 @@ if not st.session_state.calendar_events:
             'start_time': '18:00',
             'end_time': '20:00',
             'type': '🏀 Game',
-            'location': 'Main Court',
+            'location': 'Arc: Health and Fitness Centre',
             'description': 'Regular weekly basketball game for all skill levels',
             'created_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat()
@@ -1878,7 +1869,7 @@ elif section == '⚙️ Admin':
                     with col2:
                         event_type = st.selectbox("Event Type*", list(EVENT_TYPES.keys()))
                         end_time = st.time_input("End Time*", value=time(20, 0))
-                        event_location = st.text_input("Location", placeholder="e.g., Main Court")
+                        event_location = st.text_input("Location", placeholder="e.g., Arc: Health and Fitness Centre")
                     
                     event_description = st.text_area("Description", placeholder="Optional event description...")
                     
@@ -2507,7 +2498,7 @@ except ImportError as e:
 
 # --- Constants ---
 CAPACITY = int(os.getenv('GAME_CAPACITY', '15'))
-DEFAULT_LOCATION = "Main Court"
+DEFAULT_LOCATION = "Arc: Health and Fitness Centre"
 CUTOFF_DAYS = int(os.getenv('RSVP_CUTOFF_DAYS', '1'))
 SESSION_TIMEOUT_MINUTES = 30
 
