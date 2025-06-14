@@ -1,3 +1,11 @@
+For script below, I am generating this error:
+File "/mount/src/basketball-organizer-app/Basketball_organizer_gt.py", line 169
+      ]
+      ^
+SyntaxError: unmatched ']'
+
+what is the issue and the solution to the issue?
+
 import streamlit as st
 import pandas as pd
 import os
@@ -130,7 +138,7 @@ def create_calendar_event(title: str, event_date: date, start_time: time, end_ti
     """Create a new calendar event"""
     try:
         event_id = len(st.session_state.calendar_events) + 1
-        event = {
+        event = [ {
             'id': event_id,
             'title': title,
             'date': event_date.isoformat(),
