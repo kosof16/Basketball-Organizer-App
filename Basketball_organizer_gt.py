@@ -170,6 +170,11 @@ def init_session_state():
 # Initialize session state
 init_session_state()
 
+# Initialize database tables on first run
+if "tables_initialized" not in st.session_state:
+    create_tables()
+    st.session_state.tables_initialized = True
+
 # --- Database Connection Management ---
 @lru_cache(maxsize=1)
 def get_connection_pool():
@@ -225,6 +230,96 @@ def release_connection(conn, db_type):
         pool, _ = get_connection_pool()
         if pool:
             pool.putconn(conn)
+
+# --- Database Table Creation ---
+def create_tables():
+    """Create necessary database tables"""
+    conn, db_type = get_connection()
+    
+    if db_type == "session":
+        # Using session state, no tables needed
+        return True
+    
+    try:
+        cur = conn.cursor()
+        
+        if db_type == "postgresql":
+            # Create games table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS games (
+                    id SERIAL PRIMARY KEY,
+                    game_date DATE NOT NULL,
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    location VARCHAR(255) NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT TRUE
+                )
+            """)
+            
+            # Create responses table
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS responses (
+                    id SERIAL PRIMARY KEY,
+                    game_id INTEGER REFERENCES games(id),
+                    name VARCHAR(255) NOT NULL,
+                    others TEXT,
+                    status VARCHAR(50) DEFAULT '',
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(game_id, name)
+                )
+            """)
+            
+            # Create indexes
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_game_id ON responses(game_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_games_active ON games(is_active)")
+            
+        else:  # SQLite
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS games (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_date DATE NOT NULL,
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    location TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    is_active BOOLEAN DEFAULT 1
+                )
+            """)
+            
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS responses (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id INTEGER,
+                    name TEXT NOT NULL,
+                    others TEXT,
+                    status TEXT DEFAULT '',
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (game_id) REFERENCES games(id),
+                    UNIQUE(game_id, name)
+                )
+            """)
+            
+            # Create indexes
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_game_id ON responses(game_id)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status)")
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_games_active ON games(is_active)")
+        
+        conn.commit()
+        cur.close()
+        logger.info("Database tables created successfully")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error creating tables: {e}")
+        if conn:
+            conn.rollback()
+        return False
+    finally:
+        release_connection(conn, db_type)
 
 # --- Session State Storage Functions ---
 def save_game_session(game_date, start_time, end_time, location):
@@ -2419,98 +2514,3 @@ if st.session_state.user_preferences.get("auto_refresh", True):
         if time_since_refresh > timedelta(minutes=5):
             st.session_state.last_refresh = datetime.now()
             st.rerun()
-
-# Initialize tables on first run
-if "tables_initialized" not in st.session_state:
-    create_tables()
-    st.session_state.tables_initialized = True
-
-# Helper function for creating tables
-def create_tables():
-    """Create necessary database tables"""
-    conn, db_type = get_connection()
-    
-    if db_type == "session":
-        # Using session state, no tables needed
-        return True
-    
-    try:
-        cur = conn.cursor()
-        
-        if db_type == "postgresql":
-            # Create games table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS games (
-                    id SERIAL PRIMARY KEY,
-                    game_date DATE NOT NULL,
-                    start_time TIME NOT NULL,
-                    end_time TIME NOT NULL,
-                    location VARCHAR(255) NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT TRUE
-                )
-            """)
-            
-            # Create responses table
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS responses (
-                    id SERIAL PRIMARY KEY,
-                    game_id INTEGER REFERENCES games(id),
-                    name VARCHAR(255) NOT NULL,
-                    others TEXT,
-                    status VARCHAR(50) DEFAULT '',
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(game_id, name)
-                )
-            """)
-            
-            # Create indexes
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_game_id ON responses(game_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_games_active ON games(is_active)")
-            
-        else:  # SQLite
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS games (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_date DATE NOT NULL,
-                    start_time TIME NOT NULL,
-                    end_time TIME NOT NULL,
-                    location TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1
-                )
-            """)
-            
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS responses (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    game_id INTEGER,
-                    name TEXT NOT NULL,
-                    others TEXT,
-                    status TEXT DEFAULT '',
-                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (game_id) REFERENCES games(id),
-                    UNIQUE(game_id, name)
-                )
-            """)
-            
-            # Create indexes
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_game_id ON responses(game_id)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_responses_status ON responses(status)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_games_active ON games(is_active)")
-        
-        conn.commit()
-        cur.close()
-        logger.info("Database tables created successfully")
-        return True
-        
-    except Exception as e:
-        logger.error(f"Error creating tables: {e}")
-        if conn:
-            conn.rollback()
-        return False
-    finally:
-        release_connection(conn, db_type)
