@@ -27,6 +27,54 @@ st.set_page_config(
     }
 )
 
+# --- Constants ---
+CAPACITY = int(os.getenv('GAME_CAPACITY', '15'))
+DEFAULT_LOCATION = "Arc: Health and Fitness Centre"
+CUTOFF_DAYS = int(os.getenv('RSVP_CUTOFF_DAYS', '1'))
+SESSION_TIMEOUT_MINUTES = 30
+CACHE_TTL = 300  # 5 minutes cache
+
+# Event types for calendar
+EVENT_TYPES = {
+    "🏀 Game": {"color": "#4CAF50", "icon": "🏀"},
+    "🏃 Training": {"color": "#2196F3", "icon": "🏃"},
+    "🏆 Tournament": {"color": "#FF9800", "icon": "🏆"},
+    "🎉 Social": {"color": "#9C27B0", "icon": "🎉"},
+    "📋 Meeting": {"color": "#607D8B", "icon": "📋"},
+    "🚫 Cancelled": {"color": "#F44336", "icon": "🚫"}
+}
+
+# --- Initialize availability flags ---
+DB_AVAILABLE = False
+SQLITE_AVAILABLE = False
+GOOGLE_DRIVE_AVAILABLE = False
+
+# Try to import PostgreSQL driver
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    DB_AVAILABLE = True
+    logger.info("PostgreSQL driver loaded successfully")
+except ImportError:
+    logger.warning("PostgreSQL driver not available")
+    try:
+        import sqlite3
+        SQLITE_AVAILABLE = True
+        logger.info("SQLite available as fallback")
+    except ImportError:
+        logger.error("No database drivers available")
+
+# Google Drive integration
+try:
+    from google.oauth2 import service_account
+    from googleapiclient.discovery import build
+    from googleapiclient.http import MediaIoBaseUpload
+    import io
+    GOOGLE_DRIVE_AVAILABLE = True
+    logger.info("Google Drive integration available")
+except ImportError:
+    logger.warning("Google Drive integration not available")
+
 # --- Custom CSS for better UI ---
 st.markdown("""
 <style>
@@ -94,55 +142,9 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Constants ---
-CAPACITY = int(os.getenv('GAME_CAPACITY', '15'))
-DEFAULT_LOCATION = "Arc: Health and Fitness Centre"
-CUTOFF_DAYS = int(os.getenv('RSVP_CUTOFF_DAYS', '1'))
-SESSION_TIMEOUT_MINUTES = 30
-CACHE_TTL = 300  # 5 minutes cache
+# === CORE FUNCTION DEFINITIONS START HERE ===
 
-# Event types for calendar
-EVENT_TYPES = {
-    "🏀 Game": {"color": "#4CAF50", "icon": "🏀"},
-    "🏃 Training": {"color": "#2196F3", "icon": "🏃"},
-    "🏆 Tournament": {"color": "#FF9800", "icon": "🏆"},
-    "🎉 Social": {"color": "#9C27B0", "icon": "🎉"},
-    "📋 Meeting": {"color": "#607D8B", "icon": "📋"},
-    "🚫 Cancelled": {"color": "#F44336", "icon": "🚫"}
-}
-
-# --- Initialize availability flags ---
-DB_AVAILABLE = False
-SQLITE_AVAILABLE = False
-GOOGLE_DRIVE_AVAILABLE = False
-
-# Try to import PostgreSQL driver
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    DB_AVAILABLE = True
-    logger.info("PostgreSQL driver loaded successfully")
-except ImportError:
-    logger.warning("PostgreSQL driver not available")
-    try:
-        import sqlite3
-        SQLITE_AVAILABLE = True
-        logger.info("SQLite available as fallback")
-    except ImportError:
-        logger.error("No database drivers available")
-
-# Google Drive integration
-try:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
-    import io
-    GOOGLE_DRIVE_AVAILABLE = True
-    logger.info("Google Drive integration available")
-except ImportError:
-    logger.warning("Google Drive integration not available")
-
-# --- Session State Initialization ---
+# --- Session State Functions ---
 def init_session_state():
     """Initialize all session state variables"""
     defaults = {
@@ -160,22 +162,15 @@ def init_session_state():
             "theme": "light",
             "notifications": True,
             "auto_refresh": True
-        }
+        },
+        "tables_initialized": False
     }
     
     for key, value in defaults.items():
         if key not in st.session_state:
             st.session_state[key] = value
 
-# Initialize session state
-init_session_state()
-
-# Initialize database tables on first run
-if "tables_initialized" not in st.session_state:
-    create_tables()
-    st.session_state.tables_initialized = True
-
-# --- Database Connection Management ---
+# --- Database Connection Functions ---
 @lru_cache(maxsize=1)
 def get_connection_pool():
     """Get or create a connection pool (cached)"""
@@ -231,13 +226,13 @@ def release_connection(conn, db_type):
         if pool:
             pool.putconn(conn)
 
-# --- Database Table Creation ---
 def create_tables():
     """Create necessary database tables"""
     conn, db_type = get_connection()
     
     if db_type == "session":
         # Using session state, no tables needed
+        logger.info("Using session state storage - no tables to create")
         return True
     
     try:
@@ -1127,6 +1122,20 @@ def display_day_events(target_date: date):
                                 st.success("Event deleted!")
                                 log_admin_action("admin", "Event deleted", f"Event: {event['title']}")
                                 st.rerun()
+
+# === INITIALIZATION CODE ===
+# Initialize session state first
+init_session_state()
+
+# Initialize database tables if needed
+if not st.session_state.tables_initialized:
+    if create_tables():
+        st.session_state.tables_initialized = True
+        logger.info("Database tables initialized successfully")
+    else:
+        logger.warning("Failed to initialize database tables, using session state storage")
+
+# === MAIN APPLICATION STARTS HERE ===
 
 # --- Main Navigation ---
 st.sidebar.title("🏀 Basketball Organizer")
