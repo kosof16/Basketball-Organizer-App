@@ -1370,7 +1370,7 @@ if current_section == "rsvp":
             
             # Check for existing RSVP
             user_name = st.session_state.get('last_rsvp_name', '')
-            existing_rsvp = None
+            existing_rsvp = pd.DataFrame()  # Initialize as empty DataFrame instead of None
             if user_name and not df.empty:
                 existing_rsvp = df[df['name'].str.lower() == user_name.lower()]
             
@@ -2513,7 +2513,6 @@ if st.session_state.calendar_events:
 # Version and credits
 st.sidebar.markdown("---")
 st.sidebar.caption("Basketball Organizer v2.0")
-st.sidebar.caption("Built with ❤️ using Streamlit")
 
 # Auto-refresh functionality
 if st.session_state.user_preferences.get("auto_refresh", True):
