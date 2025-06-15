@@ -8,7 +8,6 @@ import json
 import logging
 from typing import Optional, Dict, List, Any, Tuple
 import calendar
-from functools import lru_cache
 import hashlib
 
 # Configure logging
@@ -171,60 +170,41 @@ def init_session_state():
             st.session_state[key] = value
 
 # --- Database Connection Functions ---
-@lru_cache(maxsize=1)
-def get_connection_pool():
-    """Get or create a connection pool (cached)"""
+def get_connection():
+    """Get a database connection"""
     if DB_AVAILABLE and "database" in st.secrets:
         try:
-            import psycopg2.pool
-            pool = psycopg2.pool.SimpleConnectionPool(
-                1, 5,  # min and max connections
+            conn = psycopg2.connect(
                 host=st.secrets["database"]["host"],
                 database=st.secrets["database"]["dbname"],
                 user=st.secrets["database"]["user"],
                 password=st.secrets["database"]["password"],
-                port=st.secrets["database"]["port"]
+                port=st.secrets["database"]["port"],
+                connect_timeout=10
             )
-            logger.info("PostgreSQL connection pool created")
-            return pool, "postgresql"
+            return conn, "postgresql"
         except Exception as e:
-            logger.error(f"PostgreSQL pool creation failed: {e}")
+            logger.error(f"PostgreSQL connection failed: {e}")
     
     # Fallback to SQLite
     if SQLITE_AVAILABLE:
-        logger.info("Using SQLite fallback")
-        return None, "sqlite"
-    
-    logger.warning("Using session state storage")
-    return None, "session"
-
-def get_connection():
-    """Get a database connection from pool or create one"""
-    pool, db_type = get_connection_pool()
-    
-    if db_type == "postgresql" and pool:
-        try:
-            return pool.getconn(), db_type
-        except Exception as e:
-            logger.error(f"Failed to get connection from pool: {e}")
-            return None, "session"
-    elif db_type == "sqlite":
         try:
             conn = sqlite3.connect(':memory:', check_same_thread=False)
             conn.row_factory = sqlite3.Row
             return conn, "sqlite"
         except Exception as e:
             logger.error(f"SQLite connection failed: {e}")
-            return None, "session"
     
+    logger.warning("Using session state storage")
     return None, "session"
 
 def release_connection(conn, db_type):
-    """Release connection back to pool"""
-    if db_type == "postgresql" and conn:
-        pool, _ = get_connection_pool()
-        if pool:
-            pool.putconn(conn)
+    """Release connection"""
+    if conn and db_type == "postgresql":
+        try:
+            conn.close()
+        except:
+            pass
 
 def create_tables():
     """Create necessary database tables"""
@@ -261,9 +241,23 @@ def create_tables():
                     others TEXT,
                     status VARCHAR(50) DEFAULT '',
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(game_id, name)
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
+            """)
+            
+            # Add unique constraint if it doesn't exist
+            cur.execute("""
+                DO $ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint 
+                        WHERE conname = 'unique_game_name'
+                    ) THEN
+                        ALTER TABLE responses 
+                        ADD CONSTRAINT unique_game_name 
+                        UNIQUE (game_id, name);
+                    END IF;
+                END $;
             """)
             
             # Create indexes
@@ -484,14 +478,19 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
         
         # Check if exists and update or insert
         if db_type == "postgresql":
+            # First try to update existing record
             cur.execute("""
-                INSERT INTO responses (game_id, name, others, status)
-                VALUES (%s, %s, %s, %s)
-                ON CONFLICT (game_id, name) 
-                DO UPDATE SET others = EXCLUDED.others, 
-                             status = EXCLUDED.status,
-                             updated_at = CURRENT_TIMESTAMP
-            """, (game_id, name, others, status))
+                UPDATE responses 
+                SET others = %s, status = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE game_id = %s AND name = %s
+            """, (others, status, game_id, name))
+            
+            # If no rows were updated, insert new record
+            if cur.rowcount == 0:
+                cur.execute("""
+                    INSERT INTO responses (game_id, name, others, status)
+                    VALUES (%s, %s, %s, %s)
+                """, (game_id, name, others, status))
         else:  # SQLite
             cur.execute("""
                 INSERT OR REPLACE INTO responses (game_id, name, others, status)
@@ -518,13 +517,33 @@ def load_responses(game_id: int) -> pd.DataFrame:
     
     try:
         if db_type == "postgresql":
-            query = "SELECT * FROM responses WHERE game_id = %s ORDER BY timestamp"
-            df = pd.read_sql_query(query, conn, params=(game_id,))
+            # Use direct query to avoid pandas warning
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT * FROM responses 
+                WHERE game_id = %s 
+                ORDER BY timestamp
+            """, (game_id,))
+            
+            # Get column names
+            columns = [desc[0] for desc in cur.description]
+            
+            # Fetch all rows
+            rows = cur.fetchall()
+            cur.close()
+            
+            # Create DataFrame manually
+            if rows:
+                df = pd.DataFrame(rows, columns=columns)
+            else:
+                df = pd.DataFrame(columns=columns)
+                
+            return df
         else:  # SQLite
             query = "SELECT * FROM responses WHERE game_id = ? ORDER BY timestamp"
             df = pd.read_sql_query(query, conn, params=(game_id,))
-        
-        return df
+            return df
+            
     except Exception as e:
         logger.error(f"Error loading responses: {e}")
         return pd.DataFrame()
@@ -726,13 +745,44 @@ def format_time_str(t_str) -> str:
             if 'T' in t_str:  # ISO format
                 t = datetime.fromisoformat(t_str).time()
             else:
-                t = datetime.strptime(t_str, '%H:%M:%S').time()
+                # Try different time formats
+                for fmt in ['%H:%M:%S', '%H:%M', '%I:%M %p', '%I:%M:%S %p']:
+                    try:
+                        t = datetime.strptime(t_str, fmt).time()
+                        break
+                    except:
+                        continue
+                else:
+                    # If all fail, return original string
+                    return str(t_str)
         else:
             t = t_str
     except:
         return str(t_str)
     
-    return t.strftime("%-I:%M %p")
+    # Format time in a cross-platform way
+    hour = t.hour
+    minute = t.minute
+    
+    # Convert to 12-hour format
+    if hour == 0:
+        hour_12 = 12
+        period = "AM"
+    elif hour < 12:
+        hour_12 = hour
+        period = "AM"
+    elif hour == 12:
+        hour_12 = 12
+        period = "PM"
+    else:
+        hour_12 = hour - 12
+        period = "PM"
+    
+    # Format the time string
+    if minute == 0:
+        return f"{hour_12}:00 {period}"
+    else:
+        return f"{hour_12}:{minute:02d} {period}"
 
 def update_statuses(game_id: int):
     """Update response statuses based on capacity"""
@@ -1075,53 +1125,63 @@ def display_day_events(target_date: date):
         for event in events:
             event_type_info = EVENT_TYPES.get(event['type'], {"color": "#666", "icon": "📅"})
             
+            # Clean event type for display (remove emojis)
+            clean_event_type = event['type']
+            for emoji in ['🏀', '🏃', '🏆', '🎉', '📋', '🚫']:
+                clean_event_type = clean_event_type.replace(emoji, '').strip()
+            
             # Event card with gradient background
             with st.container():
-                event_html = f"""
-                <div style="
-                    background: linear-gradient(135deg, {event_type_info['color']}15 0%, {event_type_info['color']}05 100%);
-                    border-left: 4px solid {event_type_info['color']};
-                    border-radius: 8px;
-                    padding: 16px;
-                    margin: 12px 0;
-                    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-                    transition: all 0.3s ease;
-                ">
-                    <div style="display: flex; justify-content: space-between; align-items: start;">
-                        <div style="flex: 1;">
-                            <h4 style="margin: 0 0 8px 0; color: {event_type_info['color']};">
-                                {event_type_info['icon']} {event['title']}
-                            </h4>
-                            <div style="color: #666; font-size: 14px;">
-                                <span style="margin-right: 16px;">🕐 {format_time_str(event['start_time'])} - {format_time_str(event['end_time'])}</span>
-                                <span>📍 {event['location']}</span>
+                # Create columns for layout
+                event_col, admin_col = st.columns([10, 2])
+                
+                with event_col:
+                    event_html = f"""
+                    <div style="
+                        background: linear-gradient(135deg, {event_type_info['color']}15 0%, {event_type_info['color']}05 100%);
+                        border-left: 4px solid {event_type_info['color']};
+                        border-radius: 8px;
+                        padding: 16px;
+                        margin: 12px 0;
+                        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+                        transition: all 0.3s ease;
+                    ">
+                        <div style="display: flex; justify-content: space-between; align-items: start;">
+                            <div style="flex: 1;">
+                                <h4 style="margin: 0 0 8px 0; color: {event_type_info['color']};">
+                                    {event_type_info['icon']} {event['title']}
+                                </h4>
+                                <div style="color: #666; font-size: 14px;">
+                                    <span style="margin-right: 16px;">🕐 {format_time_str(event['start_time'])} - {format_time_str(event['end_time'])}</span>
+                                    <span>📍 {event['location']}</span>
+                                </div>
+                                {f'<p style="margin: 8px 0 0 0; color: #555; font-size: 14px;">{event["description"]}</p>' if event.get('description') else ''}
                             </div>
-                            {f'<p style="margin: 8px 0 0 0; color: #555; font-size: 14px;">{event["description"]}</p>' if event.get('description') else ''}
-                        </div>
-                        <div style="background: {event_type_info['color']}; color: white; padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 500;">
-                            {event['type'].replace('🏀 ', '').replace('🏃 ', '').replace('🏆 ', '').replace('🎉 ', '').replace('📋 ', '').replace('🚫 ', '')}
+                            <div style="background: {event_type_info['color']}; color: white; padding: 4px 12px; border-radius: 16px; font-size: 12px; font-weight: 500;">
+                                {clean_event_type}
+                            </div>
                         </div>
                     </div>
-                </div>
-                """
-                st.markdown(event_html, unsafe_allow_html=True)
+                    """
+                    st.markdown(event_html, unsafe_allow_html=True)
                 
-                # Admin controls
-                if st.session_state.admin_authenticated:
-                    admin_cols = st.columns([8, 1, 1])
-                    with admin_cols[1]:
-                        if st.button("✏️", key=f"edit_day_{event['id']}", 
-                                   help="Edit event", use_container_width=True):
-                            st.session_state.editing_event_id = event['id']
-                            st.session_state.show_edit_form = True
-                            st.rerun()
-                    with admin_cols[2]:
-                        if st.button("🗑️", key=f"delete_day_{event['id']}", 
-                                   help="Delete event", use_container_width=True):
-                            if delete_calendar_event(event['id']):
-                                st.success("Event deleted!")
-                                log_admin_action("admin", "Event deleted", f"Event: {event['title']}")
+                # Admin controls in separate column
+                with admin_col:
+                    if st.session_state.admin_authenticated:
+                        button_cols = st.columns(2)
+                        with button_cols[0]:
+                            if st.button("✏️", key=f"edit_day_{event['id']}", 
+                                       help="Edit event"):
+                                st.session_state.editing_event_id = event['id']
+                                st.session_state.show_edit_form = True
                                 st.rerun()
+                        with button_cols[1]:
+                            if st.button("🗑️", key=f"delete_day_{event['id']}", 
+                                       help="Delete event"):
+                                if delete_calendar_event(event['id']):
+                                    st.success("Event deleted!")
+                                    log_admin_action("admin", "Event deleted", f"Event: {event['title']}")
+                                    st.rerun()
 
 # === INITIALIZATION CODE ===
 # Initialize session state first
@@ -2055,8 +2115,6 @@ elif current_section == "admin":
             
             with db_cols[0]:
                 if st.button("🔄 Refresh Connection", use_container_width=True):
-                    # Clear connection cache
-                    get_connection_pool.cache_clear()
                     st.success("Connection refreshed!")
                     st.rerun()
             
@@ -2512,7 +2570,8 @@ if st.session_state.calendar_events:
 
 # Version and credits
 st.sidebar.markdown("---")
-st.sidebar.caption("Basketball Organizer v2.0")
+st.sidebar.caption("Basketball Organizer v2.1")
+
 
 # Auto-refresh functionality
 if st.session_state.user_preferences.get("auto_refresh", True):
