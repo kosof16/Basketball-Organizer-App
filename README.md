@@ -454,7 +454,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - **Issues**: [GitHub Issues](https://github.com/kosof16/Basketball-Organizer-App/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/kosof16/Basketball-Organizer-App/discussions)
-- **Email**: your-email@example.com
+- **Email**: kosof16@gmail.com
 
 ---
 
@@ -485,3 +485,4 @@ If you find this project useful, please consider:
 🏀 **Keep ballin'!** 🏀
 
 </div>
+
