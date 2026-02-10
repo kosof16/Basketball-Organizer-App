@@ -3,16 +3,55 @@ import pandas as pd
 import os
 from datetime import datetime, date, time, timedelta
 import random
-import altair as alt
 import json
 import logging
 from typing import Optional, Dict, List, Any, Tuple
 import calendar
 import hashlib
+from functools import lru_cache
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Lazy-loaded modules (deferred to first use)
+_altair = None
+_psycopg2 = None
+_psycopg2_extras = None
+_sqlite3 = None
+_google_service_account = None
+_google_build = None
+_google_media_upload = None
+_io_module = None
+
+
+def _get_altair():
+    """Lazy-load altair only when needed for charts"""
+    global _altair
+    if _altair is None:
+        import altair as alt
+        _altair = alt
+    return _altair
+
+
+def _get_psycopg2():
+    """Lazy-load psycopg2 only when PostgreSQL is needed"""
+    global _psycopg2, _psycopg2_extras
+    if _psycopg2 is None:
+        import psycopg2
+        from psycopg2.extras import RealDictCursor
+        _psycopg2 = psycopg2
+        _psycopg2_extras = RealDictCursor
+    return _psycopg2
+
+
+def _get_sqlite3():
+    """Lazy-load sqlite3"""
+    global _sqlite3
+    if _sqlite3 is None:
+        import sqlite3
+        _sqlite3 = sqlite3
+    return _sqlite3
 
 # --- Page Config (Must be first) ---
 st.set_page_config(
@@ -43,103 +82,84 @@ EVENT_TYPES = {
     "🚫 Cancelled": {"color": "#F44336", "icon": "🚫"}
 }
 
-# --- Initialize availability flags ---
-DB_AVAILABLE = False
-SQLITE_AVAILABLE = False
-GOOGLE_DRIVE_AVAILABLE = False
-
-# Try to import PostgreSQL driver
-try:
-    import psycopg2
-    from psycopg2.extras import RealDictCursor
-    DB_AVAILABLE = True
-    logger.info("PostgreSQL driver loaded successfully")
-except ImportError:
-    logger.warning("PostgreSQL driver not available")
+# --- Lazy availability checks (deferred imports for faster startup) ---
+@st.cache_resource
+def _check_db_availability():
+    """Check database driver availability once and cache the result"""
     try:
-        import sqlite3
-        SQLITE_AVAILABLE = True
-        logger.info("SQLite available as fallback")
+        _get_psycopg2()
+        logger.info("PostgreSQL driver loaded successfully")
+        return "postgresql"
     except ImportError:
-        logger.error("No database drivers available")
+        logger.warning("PostgreSQL driver not available")
+        try:
+            _get_sqlite3()
+            logger.info("SQLite available as fallback")
+            return "sqlite"
+        except ImportError:
+            logger.error("No database drivers available")
+            return "none"
 
-# Google Drive integration
-try:
-    from google.oauth2 import service_account
-    from googleapiclient.discovery import build
-    from googleapiclient.http import MediaIoBaseUpload
-    import io
-    GOOGLE_DRIVE_AVAILABLE = True
-    logger.info("Google Drive integration available")
-except ImportError:
-    logger.warning("Google Drive integration not available")
 
-# --- Custom CSS for better UI ---
-st.markdown("""
+@st.cache_resource
+def _check_google_drive_availability():
+    """Check Google Drive availability once and cache the result"""
+    try:
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        from googleapiclient.http import MediaIoBaseUpload
+        global _google_service_account, _google_build, _google_media_upload, _io_module
+        _google_service_account = service_account
+        _google_build = build
+        _google_media_upload = MediaIoBaseUpload
+        import io
+        _io_module = io
+        logger.info("Google Drive integration available")
+        return True
+    except ImportError:
+        logger.warning("Google Drive integration not available")
+        return False
+
+
+# Evaluate once per session via cache
+_db_driver = _check_db_availability()
+DB_AVAILABLE = _db_driver == "postgresql"
+SQLITE_AVAILABLE = _db_driver == "sqlite"
+GOOGLE_DRIVE_AVAILABLE = _check_google_drive_availability()
+
+# --- Custom CSS for better UI (cached string to avoid reprocessing) ---
+@st.cache_data
+def _get_custom_css():
+    return """
 <style>
-    /* Main container styling */
-    .main {
-        padding-top: 2rem;
-    }
-    
-    /* Card styling */
+    .main { padding-top: 2rem; }
     .stContainer > div {
-        background-color: #f8f9fa;
-        padding: 1.5rem;
-        border-radius: 10px;
-        margin-bottom: 1rem;
+        background-color: #f8f9fa; padding: 1.5rem;
+        border-radius: 10px; margin-bottom: 1rem;
     }
-    
-    /* Metric styling */
     [data-testid="metric-container"] {
-        background-color: #ffffff;
-        border: 1px solid #e0e0e0;
-        padding: 1rem;
-        border-radius: 8px;
+        background-color: #ffffff; border: 1px solid #e0e0e0;
+        padding: 1rem; border-radius: 8px;
         box-shadow: 0 2px 4px rgba(0,0,0,0.05);
     }
-    
-    /* Button styling */
-    .stButton > button {
-        transition: all 0.3s ease;
-    }
-    
+    .stButton > button { transition: all 0.3s ease; }
     .stButton > button:hover {
         transform: translateY(-2px);
         box-shadow: 0 4px 8px rgba(0,0,0,0.1);
     }
-    
-    /* Calendar day buttons */
     div[data-testid="column"] > div > button {
-        width: 100%;
-        min-height: 60px;
-        margin: 2px;
+        width: 100%; min-height: 60px; margin: 2px;
     }
-    
-    /* Success/Error messages */
     .stSuccess, .stError, .stWarning, .stInfo {
-        padding: 1rem;
-        border-radius: 8px;
-        margin: 1rem 0;
+        padding: 1rem; border-radius: 8px; margin: 1rem 0;
     }
-    
-    /* Expander styling */
-    .streamlit-expanderHeader {
-        font-weight: 600;
-        font-size: 1.1rem;
-    }
-    
-    /* Tab styling */
-    .stTabs [data-baseweb="tab-list"] {
-        gap: 24px;
-    }
-    
-    .stTabs [data-baseweb="tab"] {
-        padding: 8px 16px;
-        font-weight: 500;
-    }
+    .streamlit-expanderHeader { font-weight: 600; font-size: 1.1rem; }
+    .stTabs [data-baseweb="tab-list"] { gap: 24px; }
+    .stTabs [data-baseweb="tab"] { padding: 8px 16px; font-weight: 500; }
 </style>
-""", unsafe_allow_html=True)
+"""
+
+st.markdown(_get_custom_css(), unsafe_allow_html=True)
 
 # === CORE FUNCTION DEFINITIONS START HERE ===
 
@@ -170,10 +190,20 @@ def init_session_state():
             st.session_state[key] = value
 
 # --- Database Connection Functions ---
+@st.cache_resource
+def _get_persistent_sqlite_connection():
+    """Create a single SQLite connection cached for the session"""
+    sqlite3 = _get_sqlite3()
+    conn = sqlite3.connect(':memory:', check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
 def get_connection():
-    """Get a database connection"""
+    """Get a database connection (PostgreSQL connections are per-request, SQLite is cached)"""
     if DB_AVAILABLE and "database" in st.secrets:
         try:
+            psycopg2 = _get_psycopg2()
             conn = psycopg2.connect(
                 host=st.secrets["database"]["host"],
                 database=st.secrets["database"]["dbname"],
@@ -185,29 +215,35 @@ def get_connection():
             return conn, "postgresql"
         except Exception as e:
             logger.error(f"PostgreSQL connection failed: {e}")
-    
-    # Fallback to SQLite
+
+    # Fallback to cached SQLite connection
     if SQLITE_AVAILABLE:
         try:
-            conn = sqlite3.connect(':memory:', check_same_thread=False)
-            conn.row_factory = sqlite3.Row
-            return conn, "sqlite"
+            return _get_persistent_sqlite_connection(), "sqlite"
         except Exception as e:
             logger.error(f"SQLite connection failed: {e}")
-    
+
     logger.warning("Using session state storage")
     return None, "session"
 
 def release_connection(conn, db_type):
-    """Release connection"""
+    """Release connection (only closes PostgreSQL; SQLite is cached)"""
     if conn and db_type == "postgresql":
         try:
             conn.close()
         except:
             pass
 
+@st.cache_resource
+def _tables_created_flag():
+    """Track whether tables have been created (runs once per app lifecycle)"""
+    return {"created": False}
+
 def create_tables():
-    """Create necessary database tables"""
+    """Create necessary database tables (skips if already done)"""
+    flag = _tables_created_flag()
+    if flag["created"]:
+        return True
     conn, db_type = get_connection()
     
     if db_type == "session":
@@ -299,9 +335,10 @@ def create_tables():
         
         conn.commit()
         cur.close()
+        flag["created"] = True
         logger.info("Database tables created successfully")
         return True
-        
+
     except Exception as e:
         logger.error(f"Error creating tables: {e}")
         if conn:
@@ -383,15 +420,18 @@ def delete_responses_session(game_id, names):
 
 # --- Main Database Interface Functions ---
 def save_game(game_date, start_time, end_time, location) -> bool:
-    """Save game with fallback to session state"""
+    """Save game with fallback to session state (clears game cache on success)"""
     conn, db_type = get_connection()
     
     if db_type == "session":
-        return save_game_session(game_date, start_time, end_time, location)
-    
+        result = save_game_session(game_date, start_time, end_time, location)
+        if result:
+            load_current_game.clear()
+        return result
+
     try:
         cur = conn.cursor()
-        
+
         # Deactivate current games
         if db_type == "postgresql":
             cur.execute("UPDATE games SET is_active = FALSE WHERE is_active = TRUE")
@@ -405,9 +445,10 @@ def save_game(game_date, start_time, end_time, location) -> bool:
                 INSERT INTO games (game_date, start_time, end_time, location)
                 VALUES (?, ?, ?, ?)
             """, (str(game_date), str(start_time), str(end_time), location))
-        
+
         conn.commit()
         cur.close()
+        load_current_game.clear()
         return True
     except Exception as e:
         logger.error(f"Error saving game: {e}")
@@ -417,8 +458,9 @@ def save_game(game_date, start_time, end_time, location) -> bool:
     finally:
         release_connection(conn, db_type)
 
+@st.cache_data(ttl=CACHE_TTL)
 def load_current_game() -> Optional[Dict]:
-    """Load current game with fallback"""
+    """Load current game with fallback (cached for 5 min)"""
     conn, db_type = get_connection()
     
     if db_type == "session":
@@ -468,23 +510,26 @@ def load_current_game() -> Optional[Dict]:
 def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
     """Add response with fallback"""
     conn, db_type = get_connection()
-    
+
     if db_type == "session":
-        return add_response_session(name, others, attend, game_id)
-    
+        result = add_response_session(name, others, attend, game_id)
+        if result:
+            load_responses.clear()
+        return result
+
     try:
         cur = conn.cursor()
         status = '❌ Cancelled' if not attend else ''
-        
+
         # Check if exists and update or insert
         if db_type == "postgresql":
             # First try to update existing record
             cur.execute("""
-                UPDATE responses 
+                UPDATE responses
                 SET others = %s, status = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE game_id = %s AND name = %s
             """, (others, status, game_id, name))
-            
+
             # If no rows were updated, insert new record
             if cur.rowcount == 0:
                 cur.execute("""
@@ -496,9 +541,10 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
                 INSERT OR REPLACE INTO responses (game_id, name, others, status)
                 VALUES (?, ?, ?, ?)
             """, (game_id, name, others, status))
-        
+
         conn.commit()
         cur.close()
+        load_responses.clear()
         return True
     except Exception as e:
         logger.error(f"Error adding response: {e}")
@@ -508,8 +554,9 @@ def add_response(name: str, others: str, attend: bool, game_id: int) -> bool:
     finally:
         release_connection(conn, db_type)
 
+@st.cache_data(ttl=60)
 def load_responses(game_id: int) -> pd.DataFrame:
-    """Load responses with fallback"""
+    """Load responses with fallback (cached for 60s)"""
     conn, db_type = get_connection()
     
     if db_type == "session":
@@ -553,29 +600,33 @@ def load_responses(game_id: int) -> pd.DataFrame:
 def update_response_status(game_id: int, names: List[str], new_status: str) -> bool:
     """Update response status with fallback"""
     conn, db_type = get_connection()
-    
+
     if db_type == "session":
-        return update_response_status_session(game_id, names, new_status)
-    
+        result = update_response_status_session(game_id, names, new_status)
+        if result:
+            load_responses.clear()
+        return result
+
     try:
         cur = conn.cursor()
-        
+
         if db_type == "postgresql":
             cur.execute("""
-                UPDATE responses 
+                UPDATE responses
                 SET status = %s, updated_at = CURRENT_TIMESTAMP
                 WHERE game_id = %s AND name = ANY(%s)
             """, (new_status, game_id, names))
         else:  # SQLite
             placeholders = ','.join('?' * len(names))
             cur.execute(f"""
-                UPDATE responses 
+                UPDATE responses
                 SET status = ?, updated_at = CURRENT_TIMESTAMP
                 WHERE game_id = ? AND name IN ({placeholders})
             """, [new_status, game_id] + names)
-        
+
         conn.commit()
         cur.close()
+        load_responses.clear()
         return True
     except Exception as e:
         logger.error(f"Error updating status: {e}")
@@ -588,27 +639,31 @@ def update_response_status(game_id: int, names: List[str], new_status: str) -> b
 def delete_responses(game_id: int, names: List[str]) -> bool:
     """Delete responses with fallback"""
     conn, db_type = get_connection()
-    
+
     if db_type == "session":
-        return delete_responses_session(game_id, names)
-    
+        result = delete_responses_session(game_id, names)
+        if result:
+            load_responses.clear()
+        return result
+
     try:
         cur = conn.cursor()
-        
+
         if db_type == "postgresql":
             cur.execute("""
-                DELETE FROM responses 
+                DELETE FROM responses
                 WHERE game_id = %s AND name = ANY(%s)
             """, (game_id, names))
         else:  # SQLite
             placeholders = ','.join('?' * len(names))
             cur.execute(f"""
-                DELETE FROM responses 
+                DELETE FROM responses
                 WHERE game_id = ? AND name IN ({placeholders})
             """, [game_id] + names)
-        
+
         conn.commit()
         cur.close()
+        load_responses.clear()
         return True
     except Exception as e:
         logger.error(f"Error deleting responses: {e}")
@@ -853,6 +908,7 @@ def generate_teams(game_id: int, num_teams: int = 2) -> Optional[List[List[str]]
 
 def show_metrics_and_chart(df: pd.DataFrame):
     """Display enhanced metrics and interactive chart"""
+    alt = _get_altair()
     # Calculate metrics
     confirmed = len(df[df['status'] == '✅ Confirmed'])
     waitlist = len(df[df['status'] == '⏳ Waitlist'])
@@ -929,8 +985,9 @@ def show_metrics_and_chart(df: pd.DataFrame):
         st.altair_chart(chart, use_container_width=True)
 
 # --- UI Component Functions ---
+@st.fragment
 def show_system_status():
-    """Display enhanced system status"""
+    """Display enhanced system status (fragment — reruns independently)"""
     with st.sidebar.expander("🔧 System Status", expanded=False):
         conn, db_type = get_connection()
         
@@ -1029,8 +1086,9 @@ def show_admin_tab(df: pd.DataFrame, game_id: int, status_filter: str):
     else:
         st.info(f"No players in {status_filter} status")
 
+@st.fragment
 def display_calendar_month(year: int, month: int):
-    """Display enhanced interactive calendar"""
+    """Display enhanced interactive calendar (fragment — reruns independently)"""
     cal = calendar.Calendar(firstweekday=0)
     month_days = cal.monthdayscalendar(year, month)
     events_by_day = get_events_for_month(year, month)
@@ -1234,6 +1292,8 @@ if current_section == "rsvp":
     with col2:
         if st.button("🔄", help="Refresh data"):
             st.session_state.last_refresh = datetime.now()
+            load_responses.clear()
+            load_current_game.clear()
             st.rerun()
     
     current_game = load_current_game()
@@ -2216,8 +2276,9 @@ elif current_section == "analytics":
         st.warning("🔒 Please log in as admin to view analytics")
         st.info("👈 Use the Admin section to log in")
     else:
+        alt = _get_altair()  # Lazy-load altair only for analytics page
         # Analytics tabs
-        analytics_tabs = st.tabs(["📈 Overview", "🏀 Game Analytics", 
+        analytics_tabs = st.tabs(["📈 Overview", "🏀 Game Analytics",
                                  "👥 Player Analytics", "📅 Trends"])
         
         # Overview Tab
@@ -2580,4 +2641,7 @@ if st.session_state.user_preferences.get("auto_refresh", True):
         time_since_refresh = datetime.now() - st.session_state.last_refresh
         if time_since_refresh > timedelta(minutes=5):
             st.session_state.last_refresh = datetime.now()
+            # Clear data caches so fresh data is fetched
+            load_responses.clear()
+            load_current_game.clear()
             st.rerun()
